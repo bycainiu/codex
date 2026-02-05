@@ -27,7 +27,7 @@ OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback"
 # 是否为Selenium配置代理
 USE_PROXY = True
 
-# 代理IP获取方式（走系统全局代理去获取）
+# 代理IP获取方式（默认直连获取）
 USE_PROXY_API = True
 PROXY_API_URL = "https://fps.kdlapi.com/api/getfps"
 PROXY_API_PARAMS = {
@@ -61,7 +61,9 @@ RK_FILE = "rk.txt"
 HEADLESS_MODE = False
 WINDOW_SIZE = "1920,1080"
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
-CHROME_VERSION = 143  # Chrome主版本号（运行命令检测：chrome --version）
+_env_chrome_version = os.getenv("CHROME_VERSION", "")
+CHROME_VERSION = int(_env_chrome_version) if _env_chrome_version else 143
+CHROME_BINARY = os.getenv("CHROME_BINARY", "")
 
 # ==================== 超时配置 ====================
 EMAIL_VERIFICATION_TIMEOUT = 120

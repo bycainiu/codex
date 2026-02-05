@@ -29,6 +29,28 @@ source ".venv/bin/activate"
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
+if command -v apt-get >/dev/null 2>&1; then
+  echo "== 安装 Chromium =="
+  apt-get update -y
+  apt-get install -y chromium || apt-get install -y chromium-browser
+fi
+
+if command -v chromium >/dev/null 2>&1; then
+  export CHROME_BINARY="$(command -v chromium)"
+elif command -v chromium-browser >/dev/null 2>&1; then
+  export CHROME_BINARY="$(command -v chromium-browser)"
+elif command -v google-chrome >/dev/null 2>&1; then
+  export CHROME_BINARY="$(command -v google-chrome)"
+fi
+
+if [ -n "${CHROME_BINARY:-}" ]; then
+  CHROME_VERSION_RAW="$("$CHROME_BINARY" --version || true)"
+  CHROME_VERSION_MAIN="$(echo "$CHROME_VERSION_RAW" | grep -oE '[0-9]+' | head -n 1 || true)"
+  if [ -n "$CHROME_VERSION_MAIN" ]; then
+    export CHROME_VERSION="$CHROME_VERSION_MAIN"
+  fi
+fi
+
 echo "== 测试代理IP获取与使用 =="
 python test_proxy_ip_usage.py
 

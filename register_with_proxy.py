@@ -7,6 +7,8 @@ OpenAI账号注册机 - 集成代理版本
 """
 
 import os
+import shutil
+import subprocess
 # 排除localhost代理，防止系统全局代理影响ChromeDriver通信
 os.environ['NO_PROXY'] = 'localhost,127.0.0.1'
 os.environ['no_proxy'] = 'localhost,127.0.0.1'
@@ -92,6 +94,17 @@ class OpenAIRegistrationBot:
             配置好的Chrome驱动实例
         """
         options = uc.ChromeOptions()
+
+        chrome_binary = None
+        if getattr(config, "CHROME_BINARY", ""):
+            chrome_binary = config.CHROME_BINARY
+        else:
+            chrome_binary = self.detect_chrome_binary()
+
+        if chrome_binary:
+            options.binary_location = chrome_binary
+        else:
+            raise RuntimeError("Chrome binary not found. Please install Chrome/Chromium or set CHROME_BINARY.")
         
         # 基础配置
         if config.HEADLESS_MODE:
@@ -123,14 +136,61 @@ class OpenAIRegistrationBot:
                 logger.warning("⚠️ 未获取到代理IP，Selenium将直连")
         
         logger.info("🚀 正在初始化Chrome驱动...")
-        driver = uc.Chrome(
-            options=options,
-            driver_executable_path=ChromeDriverManager().install(),
-            use_subprocess=True,
-            version_main=config.CHROME_VERSION  # Chrome主版本号
-        )
+        version_main = self.detect_chrome_version_main(chrome_binary)
+        driver_kwargs = {
+            "options": options,
+            "driver_executable_path": ChromeDriverManager().install(),
+            "use_subprocess": True
+        }
+        if version_main:
+            driver_kwargs["version_main"] = version_main
+
+        driver = uc.Chrome(**driver_kwargs)
         
         return driver
+
+    @staticmethod
+    def detect_chrome_binary() -> Optional[str]:
+        """检测Chrome/Chromium二进制路径"""
+        candidates = [
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser"
+        ]
+        for name in candidates:
+            path = shutil.which(name)
+            if path:
+                return path
+        # 常见路径
+        common_paths = [
+            "/usr/bin/google-chrome",
+            "/usr/bin/chromium",
+            "/usr/bin/chromium-browser"
+        ]
+        for path in common_paths:
+            if os.path.exists(path):
+                return path
+        return None
+
+    @staticmethod
+    def detect_chrome_version_main(binary_path: Optional[str]) -> Optional[int]:
+        """检测Chrome主版本号"""
+        if isinstance(getattr(config, "CHROME_VERSION", None), int) and config.CHROME_VERSION > 0:
+            return config.CHROME_VERSION
+
+        if not binary_path:
+            return None
+
+        try:
+            out = subprocess.check_output([binary_path, "--version"], stderr=subprocess.STDOUT, text=True)
+            match = re.search(r"(\d+)\.", out)
+            if match:
+                return int(match.group(1))
+        except Exception:
+            return None
+
+        return None
     
     def get_proxies_dict(self) -> Dict[str, str]:
         """

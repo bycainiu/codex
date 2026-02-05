@@ -4,7 +4,7 @@
 """
 代理管理模块
 
-requests请求：走系统全局代理
+requests请求：默认直连（可配置代理）
 Selenium浏览器：使用获取到的代理IP
 """
 
@@ -58,12 +58,12 @@ class ProxyManager:
         self.proxy_api_params = proxy_api_params or {}
         
         if self.use_proxy_api and self.proxy_api_url:
-            logger.info("✅ 代理API已配置，将通过系统全局代理获取IP")
+            logger.info("✅ 代理API已配置，将直连获取IP（不走系统代理）")
         elif proxy_host:
             logger.info(f"✅ 固定代理已配置: {proxy_host}:{proxy_port}")
 
         if not requests_use_proxy:
-            logger.info("   requests请求走系统全局代理")
+            logger.info("   requests请求默认直连")
     
     def get_proxies_dict(self):
         """获取requests代理字典（走全局代理则返回空）"""
