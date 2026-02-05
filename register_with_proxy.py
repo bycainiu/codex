@@ -107,7 +107,13 @@ class OpenAIRegistrationBot:
             raise RuntimeError("Chrome binary not found. Please install Chrome/Chromium or set CHROME_BINARY.")
         
         # 基础配置
-        if config.HEADLESS_MODE:
+        headless = config.HEADLESS_MODE
+        if not headless:
+            if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+                headless = True
+                logger.info("ℹ️ 未检测到显示环境，自动启用headless模式")
+
+        if headless:
             options.add_argument('--headless=new')  # 新版headless模式
         
         options.add_argument('--no-sandbox')
