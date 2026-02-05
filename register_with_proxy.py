@@ -19,7 +19,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
-from webdriver_manager.chrome import ChromeDriverManager
+# webdriver_manager removed - uc manages its own driver
 import time
 import requests
 import random
@@ -145,7 +145,7 @@ class OpenAIRegistrationBot:
         version_main = self.detect_chrome_version_main(chrome_binary)
         driver_kwargs = {
             "options": options,
-            "driver_executable_path": ChromeDriverManager().install(),
+
             "use_subprocess": True
         }
         if version_main:
