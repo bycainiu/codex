@@ -249,10 +249,19 @@ class CamoufoxRegistrationBot:
         start_time = time.time()
         detected = False
         
+        # #region agent log
+        import json as _json
+        _log_path = r"d:\projects\codex\.cursor\debug.log"
+        def _dbg(loc, msg, data, hyp):
+            with open(_log_path, "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps({"location": loc, "message": msg, "data": data, "hypothesisId": hyp, "timestamp": int(time.time()*1000), "sessionId": "debug-session"}) + "\n")
+        # #endregion
+        
         while time.time() - start_time < timeout:
             try:
                 page_content = await page.content()
                 page_content_lower = page_content.lower()
+                current_url = page.url
                 
                 # 检测 Cloudflare 特征
                 cf_indicators = [
@@ -265,7 +274,12 @@ class CamoufoxRegistrationBot:
                     "ray id",
                 ]
                 
-                is_cf_page = any(indicator in page_content_lower for indicator in cf_indicators)
+                matched_indicators = [ind for ind in cf_indicators if ind in page_content_lower]
+                is_cf_page = len(matched_indicators) > 0
+                
+                # #region agent log
+                _dbg("wait_for_cloudflare:loop", "CF检测循环", {"url": current_url, "is_cf_page": is_cf_page, "matched_indicators": matched_indicators, "elapsed": int(time.time() - start_time), "detected": detected}, "C")
+                # #endregion
                 
                 if is_cf_page:
                     if not detected:
@@ -273,23 +287,39 @@ class CamoufoxRegistrationBot:
                         detected = True
                     
                     # 尝试点击 Turnstile checkbox（如果存在）
-                    await self.try_click_turnstile(page)
+                    click_result = await self.try_click_turnstile(page)
+                    
+                    # #region agent log
+                    _dbg("wait_for_cloudflare:turnstile_click", "尝试点击Turnstile", {"click_result": click_result}, "B")
+                    # #endregion
                     
                     await asyncio.sleep(2)
                 else:
                     if detected:
                         logger.info("✅ Cloudflare 验证已完成")
+                        # #region agent log
+                        _dbg("wait_for_cloudflare:completed", "CF验证完成", {"elapsed": int(time.time() - start_time)}, "C")
+                        # #endregion
                         return True
                     else:
                         # 没有检测到 CF 验证
+                        # #region agent log
+                        _dbg("wait_for_cloudflare:no_cf", "未检测到CF验证", {"url": current_url}, "C")
+                        # #endregion
                         return False
                         
             except Exception as e:
                 logger.debug(f"Cloudflare 检测异常: {e}")
+                # #region agent log
+                _dbg("wait_for_cloudflare:exception", "检测异常", {"error": str(e)}, "C")
+                # #endregion
                 await asyncio.sleep(1)
         
         if detected:
             logger.warning("⚠️ Cloudflare 验证等待超时")
+            # #region agent log
+            _dbg("wait_for_cloudflare:timeout", "CF验证超时", {"timeout": timeout}, "C")
+            # #endregion
         return detected
     
     async def try_click_turnstile(self, page: Page) -> bool:
@@ -302,24 +332,68 @@ class CamoufoxRegistrationBot:
         Returns:
             是否成功点击
         """
+        # #region agent log
+        import json as _json
+        _log_path = r"d:\projects\codex\.cursor\debug.log"
+        def _dbg(loc, msg, data, hyp):
+            with open(_log_path, "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps({"location": loc, "message": msg, "data": data, "hypothesisId": hyp, "timestamp": int(time.time()*1000), "sessionId": "debug-session"}) + "\n")
+        # #endregion
+        
         try:
             # Turnstile iframe 选择器
             turnstile_selectors = [
                 'iframe[src*="turnstile"]',
                 'iframe[src*="challenges.cloudflare.com"]',
                 'iframe[title*="Cloudflare"]',
+                'iframe[title*="Widget"]',
             ]
+            
+            # #region agent log
+            _dbg("try_click_turnstile:start", "开始查找Turnstile iframe", {"selectors": turnstile_selectors}, "B")
+            # #endregion
             
             for selector in turnstile_selectors:
                 try:
-                    iframe = page.frame_locator(selector).first
-                    # 尝试点击 checkbox
-                    checkbox = iframe.locator('input[type="checkbox"]')
-                    if await checkbox.count() > 0:
-                        await checkbox.click()
-                        logger.info("🔘 点击了 Turnstile checkbox")
-                        return True
-                except Exception:
+                    iframe_count = await page.locator(selector).count()
+                    # #region agent log
+                    _dbg("try_click_turnstile:selector_check", f"检查选择器: {selector}", {"selector": selector, "iframe_count": iframe_count}, "B")
+                    # #endregion
+                    
+                    if iframe_count > 0:
+                        iframe = page.frame_locator(selector).first
+                        # 尝试点击 checkbox
+                        checkbox = iframe.locator('input[type="checkbox"]')
+                        checkbox_count = await checkbox.count()
+                        
+                        # #region agent log
+                        _dbg("try_click_turnstile:checkbox_check", "检查checkbox", {"selector": selector, "checkbox_count": checkbox_count}, "B")
+                        # #endregion
+                        
+                        if checkbox_count > 0:
+                            await checkbox.click()
+                            logger.info("🔘 点击了 Turnstile checkbox")
+                            # #region agent log
+                            _dbg("try_click_turnstile:clicked", "成功点击checkbox", {"selector": selector}, "B")
+                            # #endregion
+                            return True
+                        
+                        # 尝试点击 iframe 内的其他可点击元素
+                        clickable = iframe.locator('[role="checkbox"], .ctp-checkbox-label, label')
+                        clickable_count = await clickable.count()
+                        # #region agent log
+                        _dbg("try_click_turnstile:clickable_check", "检查其他可点击元素", {"clickable_count": clickable_count}, "B")
+                        # #endregion
+                        
+                        if clickable_count > 0:
+                            await clickable.first.click()
+                            logger.info("🔘 点击了 Turnstile 可点击元素")
+                            return True
+                            
+                except Exception as e:
+                    # #region agent log
+                    _dbg("try_click_turnstile:selector_error", f"选择器错误", {"selector": selector, "error": str(e)}, "B")
+                    # #endregion
                     continue
             
             # 备用方案：直接在页面坐标点击
@@ -327,15 +401,25 @@ class CamoufoxRegistrationBot:
             try:
                 # 获取视口大小
                 viewport = page.viewport_size
+                # #region agent log
+                _dbg("try_click_turnstile:viewport_click", "尝试坐标点击", {"viewport": viewport}, "B")
+                # #endregion
+                
                 if viewport:
                     # 尝试在常见的 Turnstile 位置点击
                     await page.mouse.click(viewport['width'] // 2 - 100, 300)
                     await asyncio.sleep(0.5)
-            except Exception:
+            except Exception as e:
+                # #region agent log
+                _dbg("try_click_turnstile:viewport_error", "坐标点击失败", {"error": str(e)}, "B")
+                # #endregion
                 pass
                 
         except Exception as e:
             logger.debug(f"点击 Turnstile 失败: {e}")
+            # #region agent log
+            _dbg("try_click_turnstile:fatal_error", "严重错误", {"error": str(e)}, "B")
+            # #endregion
         
         return False
     
@@ -1103,12 +1187,20 @@ class CamoufoxRegistrationBot:
             
             password = self.generate_random_password()
         
+        # #region agent log
+        import json as _json
+        _log_path = r"d:\projects\codex\.cursor\debug.log"
+        def _dbg(loc, msg, data, hyp):
+            with open(_log_path, "a", encoding="utf-8") as _f:
+                _f.write(_json.dumps({"location": loc, "message": msg, "data": data, "hypothesisId": hyp, "timestamp": int(time.time()*1000), "sessionId": "debug-session"}) + "\n")
+        # #endregion
+        
         try:
-            # Camoufox 配置
+            # Camoufox 配置 - 参考 codex.py 使用 geoip=True 而不是传入 IP
             camoufox_kwargs = {
                 "headless": getattr(config, "CAMOUFOX_HEADLESS", config.HEADLESS_MODE),
                 "humanize": True,  # 启用人性化鼠标移动
-                "disable_coop": True,  # 允许点击 Turnstile checkbox
+                "i_know_what_im_doing": True,  # 禁止 COOP 警告
                 "os": getattr(config, "CAMOUFOX_OS", "windows"),
             }
             
@@ -1116,24 +1208,52 @@ class CamoufoxRegistrationBot:
             if proxy_config:
                 camoufox_kwargs["proxy"] = proxy_config
             
-            # 添加 GeoIP
-            if geoip_target:
-                camoufox_kwargs["geoip"] = geoip_target
+            # GeoIP 配置 - 使用 True 自动检测，而不是手动指定 IP
+            # 参考 codex.py 的实现: geoip=True
+            camoufox_kwargs["geoip"] = True
+            
+            # #region agent log
+            _dbg("register:camoufox_config", "Camoufox配置", {"kwargs": {k: str(v) if k == "proxy" else v for k, v in camoufox_kwargs.items()}, "original_geoip_target": geoip_target}, "A")
+            # #endregion
             
             logger.info("🚀 正在初始化 Camoufox 浏览器...")
             
             async with AsyncCamoufox(**camoufox_kwargs) as browser:
                 page = await browser.new_page()
                 
+                # #region agent log
+                _dbg("register:browser_started", "浏览器已启动", {}, "D")
+                # #endregion
+                
                 # 访问 ChatGPT
                 url = "https://chatgpt.com"
                 logger.info(f"🌐 访问 {url}...")
                 await page.goto(url)
+                
+                # #region agent log
+                initial_url = page.url
+                _dbg("register:page_loaded", "页面加载完成", {"url": initial_url}, "E")
+                # #endregion
+                
                 await asyncio.sleep(3)
                 
                 # 等待 Cloudflare 验证完成
-                await self.wait_for_cloudflare(page, timeout=60)
+                cf_result = await self.wait_for_cloudflare(page, timeout=60)
+                
+                # #region agent log
+                post_cf_url = page.url
+                _dbg("register:post_cf_check", "CF检查完成后", {"cf_result": cf_result, "url": post_cf_url}, "C")
+                # #endregion
+                
                 await asyncio.sleep(2)
+                
+                # 再次检查页面状态
+                page_content = await page.content()
+                page_title = await page.title()
+                
+                # #region agent log
+                _dbg("register:page_state", "页面状态", {"title": page_title, "url": page.url, "content_length": len(page_content)}, "E")
+                # #endregion
                 
                 if config.SAVE_SCREENSHOTS:
                     await page.screenshot(path="camoufox_page_start.png")
@@ -1148,7 +1268,15 @@ class CamoufoxRegistrationBot:
                     'a[href*="sign-up"]',
                 ]
                 
+                # #region agent log
+                _dbg("register:signup_attempt", "尝试点击注册按钮", {"selectors": signup_selectors}, "E")
+                # #endregion
+                
                 signup_clicked = await self.click_first_visible(page, signup_selectors, timeout=20)
+                
+                # #region agent log
+                _dbg("register:signup_result", "注册按钮点击结果", {"signup_clicked": signup_clicked, "url": page.url}, "E")
+                # #endregion
                 
                 if not signup_clicked:
                     # 尝试通过文本查找
@@ -1157,15 +1285,27 @@ class CamoufoxRegistrationBot:
                         if await signup_link.is_visible():
                             await signup_link.click()
                             signup_clicked = True
-                    except Exception:
+                            # #region agent log
+                            _dbg("register:signup_text_click", "通过文本点击注册", {"success": True}, "E")
+                            # #endregion
+                    except Exception as e:
+                        # #region agent log
+                        _dbg("register:signup_text_error", "文本点击失败", {"error": str(e)}, "E")
+                        # #endregion
                         pass
                 
                 if not signup_clicked:
                     # 直接访问注册页面
                     logger.info("🔗 直接访问注册页面...")
+                    # #region agent log
+                    _dbg("register:direct_signup", "直接访问注册页面", {}, "E")
+                    # #endregion
                     await page.goto("https://chatgpt.com/auth/signup")
                     await asyncio.sleep(3)
-                    await self.wait_for_cloudflare(page, timeout=30)
+                    cf_result2 = await self.wait_for_cloudflare(page, timeout=30)
+                    # #region agent log
+                    _dbg("register:direct_signup_cf", "直接注册页CF检查", {"cf_result": cf_result2, "url": page.url}, "C")
+                    # #endregion
                 
                 await asyncio.sleep(3)
                 
