@@ -1060,6 +1060,59 @@ class OpenAIRegistrationBot:
             logger.debug(f"日期字段输入失败: {e}")
             return False
     
+    def wait_for_cloudflare(self, driver: uc.Chrome, timeout: int = 30) -> bool:
+        """
+        等待 Cloudflare 验证完成
+        
+        Args:
+            driver: Chrome驱动
+            timeout: 超时时间
+            
+        Returns:
+            是否检测到并等待了验证
+        """
+        logger.info("🔒 检查 Cloudflare 验证...")
+        start_time = time.time()
+        detected = False
+        
+        while time.time() - start_time < timeout:
+            try:
+                page_source = driver.page_source.lower()
+                
+                # 检测 Cloudflare 特征
+                cf_indicators = [
+                    "challenge-running",
+                    "cf-turnstile",
+                    "challenge-platform",
+                    "just a moment",
+                    "checking your browser",
+                    "verify you are human",
+                    "ray id",
+                ]
+                
+                is_cf_page = any(indicator in page_source for indicator in cf_indicators)
+                
+                if is_cf_page:
+                    if not detected:
+                        logger.info("⏳ 检测到 Cloudflare 验证，等待完成...")
+                        detected = True
+                    time.sleep(2)
+                else:
+                    if detected:
+                        logger.info("✅ Cloudflare 验证已完成")
+                        return True
+                    else:
+                        # 没有检测到 CF 验证
+                        return False
+                        
+            except Exception as e:
+                logger.debug(f"Cloudflare 检测异常: {e}")
+                time.sleep(1)
+        
+        if detected:
+            logger.warning("⚠️ Cloudflare 验证等待超时")
+        return detected
+
     def _debug_page_elements(self, driver: uc.Chrome, step_name: str):
         """调试：打印页面关键元素信息"""
         try:
@@ -1121,7 +1174,7 @@ class OpenAIRegistrationBot:
         except Exception as e:
             logger.debug(f"调试输出失败: {e}")
 
-    
+    def check_and_handle_error(self, driver: uc.Chrome, max_retries: int = None) -> bool:
         """
         检查并处理错误页面
         
@@ -1835,37 +1888,126 @@ class OpenAIRegistrationBot:
             driver = self.get_driver(selenium_proxy=selenium_proxy)
             
             # 访问OpenAI
-            url = "https://chat.openai.com/chat"
+            url = "https://chatgpt.com"  # 使用新域名
             logger.info(f"🌐 访问 {url}...")
             driver.get(url)
             time.sleep(3)
+            
+            # 等待 Cloudflare 验证完成
+            self.wait_for_cloudflare(driver, timeout=30)
+            time.sleep(2)
             
             if config.SAVE_SCREENSHOTS:
                 driver.save_screenshot("page_start.png")
             
             # 点击注册按钮
             logger.info("🖱️ 点击注册按钮...")
+            
+            # 调试：保存主页截图
+            if config.SAVE_SCREENSHOTS:
+                try:
+                    driver.save_screenshot("debug_homepage.png")
+                    logger.info("📸 已保存主页截图")
+                except Exception:
+                    pass
+            
+            # 扩展的注册按钮选择器
             signup_selectors = [
                 (By.CSS_SELECTOR, '[data-testid="signup-button"]'),
+                (By.CSS_SELECTOR, '[data-testid="sign-up-button"]'),
+                (By.CSS_SELECTOR, 'a[href*="signup"]'),
+                (By.CSS_SELECTOR, 'a[href*="sign-up"]'),
+                (By.CSS_SELECTOR, 'button[data-action="signup"]'),
                 (By.XPATH, "//a[contains(., 'Sign up') or contains(., '注册') or contains(., 'Sign Up')]"),
                 (By.XPATH, "//button[contains(., 'Sign up') or contains(., '注册') or contains(., 'Sign Up')]"),
+                (By.XPATH, "//span[contains(., 'Sign up') or contains(., '注册')]/parent::*"),
             ]
+            
+            signup_clicked = False
             try:
                 self.click_first_clickable(driver, signup_selectors, timeout=20)
-                time.sleep(2)
+                signup_clicked = True
+                logger.info("✅ 成功点击注册按钮")
             except TimeoutException:
-                logger.warning("⚠️ 未找到注册按钮，尝试直接打开注册页...")
-                driver.get("https://chat.openai.com/auth/signup")
-                time.sleep(2)
+                logger.warning("⚠️ 未找到注册按钮，尝试其他方式...")
+            
+            if not signup_clicked:
+                # 尝试直接访问注册页面
+                signup_urls = [
+                    "https://chat.openai.com/auth/signup",
+                    "https://auth.openai.com/signup",
+                    "https://chatgpt.com/auth/signup",
+                ]
+                for signup_url in signup_urls:
+                    try:
+                        logger.info(f"🔗 尝试直接访问: {signup_url}")
+                        driver.get(signup_url)
+                        time.sleep(3)
+                        # 检查是否成功
+                        if "signup" in driver.current_url.lower() or "email" in driver.page_source.lower():
+                            logger.info(f"✅ 成功访问注册页面: {driver.current_url}")
+                            break
+                    except Exception as e:
+                        logger.warning(f"访问 {signup_url} 失败: {e}")
+                        continue
+            else:
+                time.sleep(3)  # 等待页面跳转
+            
+            # 检查页面跳转状态
+            logger.info(f"📍 注册页面URL: {driver.current_url}")
             
             # 输入邮箱
             logger.info("📧 输入邮箱...")
+            
+            # 调试：保存点击注册按钮后的页面状态
+            if config.SAVE_SCREENSHOTS:
+                try:
+                    driver.save_screenshot("debug_after_signup_click.png")
+                    logger.info("📸 已保存注册按钮点击后的截图")
+                except Exception as e:
+                    logger.warning(f"截图失败: {e}")
+            
+            # 检查当前URL和页面状态
+            logger.info(f"📍 当前URL: {driver.current_url}")
+            
+            # 检查是否有 Cloudflare 验证
+            try:
+                page_source = driver.page_source.lower()
+                if "challenge" in page_source or "turnstile" in page_source or "cf-" in page_source:
+                    logger.warning("⚠️ 检测到可能的 Cloudflare 验证页面，等待处理...")
+                    time.sleep(10)  # 等待验证完成
+            except Exception:
+                pass
+            
+            # 扩展的邮箱输入框选择器
             email_selectors = [
                 (By.ID, "email"),
+                (By.ID, "email-input"),
                 (By.CSS_SELECTOR, 'input[type="email"]'),
                 (By.CSS_SELECTOR, 'input[name="email"]'),
+                (By.CSS_SELECTOR, 'input[name="username"]'),
                 (By.CSS_SELECTOR, 'input[autocomplete="username"]'),
+                (By.CSS_SELECTOR, 'input[autocomplete="email"]'),
+                (By.CSS_SELECTOR, 'input[data-testid="email-input"]'),
+                (By.CSS_SELECTOR, 'input[placeholder*="email" i]'),
+                (By.CSS_SELECTOR, 'input[placeholder*="邮箱"]'),
+                (By.XPATH, '//input[contains(@class, "email")]'),
             ]
+            
+            # 先打印页面上所有输入框的信息
+            try:
+                all_inputs = driver.find_elements(By.TAG_NAME, "input")
+                logger.info(f"🔍 页面上共有 {len(all_inputs)} 个input元素")
+                for i, inp in enumerate(all_inputs[:10]):
+                    try:
+                        if inp.is_displayed():
+                            attrs = f"type={inp.get_attribute('type')}, name={inp.get_attribute('name')}, id={inp.get_attribute('id')}, placeholder={inp.get_attribute('placeholder')}"
+                            logger.info(f"   输入框{i+1}: {attrs}")
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.debug(f"获取输入框信息失败: {e}")
+            
             email_input = self.wait_for_any_visible(driver, email_selectors, timeout=60)
             self.fill_input(driver, email_input, email, char_delay=0.03)
             time.sleep(1)
