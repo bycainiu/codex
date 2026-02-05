@@ -157,11 +157,27 @@ class ProxyManager:
 
         return None
     
-    def test_connection(self, test_url: str = "https://ipinfo.io/") -> bool:
-        """测试网络连接"""
+    def test_connection(self, test_url: str = "https://ipinfo.io/", proxy_address: Optional[str] = None) -> bool:
+        """
+        测试网络连接
+        
+        Args:
+            test_url: 测试URL
+            proxy_address: 代理地址 (host:port格式)，不传则直连测试
+        """
         try:
-            logger.info(f"🔍 测试网络连接...")
-            response = requests.get(test_url, timeout=15, verify=False)
+            proxies = None
+            if proxy_address:
+                proxy_url = f"http://{proxy_address}"
+                proxies = {"http": proxy_url, "https": proxy_url}
+                logger.info(f"🔍 测试代理连接: {proxy_address}")
+            else:
+                logger.info(f"🔍 测试网络直连...")
+            
+            session = requests.Session()
+            session.trust_env = False  # 不使用系统代理
+            
+            response = session.get(test_url, timeout=20, verify=False, proxies=proxies)
             
             if response.status_code == 200:
                 logger.info(f"✅ 网络连接正常!")

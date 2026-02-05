@@ -81,11 +81,15 @@ class OpenAIRegistrationBot:
                 proxy_api_params=getattr(config, "PROXY_API_PARAMS", {})
             )
             
-            # 测试网络连接（走系统全局代理）
-            if self.proxy_manager.test_connection():
-                logger.info("✅ 网络连接正常")
+            # 先获取代理IP，再通过代理测试连接
+            test_proxy = self.proxy_manager.get_selenium_proxy(retries=2, delay=2)
+            if test_proxy:
+                if self.proxy_manager.test_connection(proxy_address=test_proxy):
+                    logger.info("✅ 代理连接测试通过")
+                else:
+                    logger.warning("⚠️ 代理连接测试失败，请检查代理是否可用")
             else:
-                logger.warning("⚠️ 网络连接测试失败，请检查全局代理是否开启")
+                logger.warning("⚠️ 未能获取代理IP")
     
     def get_driver(self, selenium_proxy: Optional[str] = None) -> uc.Chrome:
         """
