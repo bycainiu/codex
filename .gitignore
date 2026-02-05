@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+env/
+ENV/
+
+# 注册结果文件
+accounts.txt
+ak.txt
+rk.txt
+codex-*.json
+
+# 日志文件
+*.log
+register.log
+
+# 截图
+*.png
+*.jpg
+*.jpeg
+
+# 配置文件（如果包含敏感信息）
+# config.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ChromeDriver
+chromedriver*
+
+# OS
+.DS_Store
+Thumbs.db
