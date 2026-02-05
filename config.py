@@ -6,6 +6,7 @@
 集中管理所有配置项
 """
 
+from operator import truediv
 import os
 
 # ==================== 注册配置 ====================
@@ -70,6 +71,13 @@ USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Ge
 _env_chrome_version = os.getenv("CHROME_VERSION", "")
 CHROME_VERSION = int(_env_chrome_version) if _env_chrome_version else 0
 CHROME_BINARY = os.getenv("CHROME_BINARY", "")
+
+# ==================== Camoufox 配置 ====================
+# Camoufox 反检测浏览器专用配置
+CAMOUFOX_HEADLESS = True
+CAMOUFOX_OS = "windows"    # 指纹伪装的操作系统：windows, macos, linux
+CAMOUFOX_HUMANIZE = True   # 启用人性化鼠标移动
+CAMOUFOX_BLOCK_IMAGES = False  # 是否阻止加载图片（节省流量）
 
 # ==================== 超时配置 ====================
 EMAIL_VERIFICATION_TIMEOUT = 120

@@ -1,0 +1,16 @@
+# Camoufox 版本注册脚本依赖
+# 安装命令: pip install -r requirements_camoufox.txt
+
+# Camoufox 反检测浏览器（包含 geoip 支持）
+camoufox[geoip]>=0.4.11
+
+# Playwright (Camoufox 的底层依赖)
+playwright>=1.40.0
+
+# HTTP 请求
+requests>=2.28.0
+urllib3>=2.0.0
+
+# 安装完成后，需要下载 Camoufox 浏览器:
+# Windows: camoufox fetch
+# macOS/Linux: python3 -m camoufox fetch
