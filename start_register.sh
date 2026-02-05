@@ -10,10 +10,22 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 if [ ! -d ".venv" ]; then
-  python3 -m venv .venv
+  python3 -m venv .venv || true
 fi
 
-source .venv/bin/activate
+if [ ! -f ".venv/bin/activate" ]; then
+  if command -v apt-get >/dev/null 2>&1; then
+    echo "== 安装 python3-venv =="
+    apt-get update -y
+    apt-get install -y python3-venv
+    python3 -m venv .venv
+  else
+    echo "ERROR: .venv/bin/activate not found and apt-get unavailable"
+    exit 1
+  fi
+fi
+
+source ".venv/bin/activate"
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
