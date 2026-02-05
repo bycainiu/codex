@@ -1189,28 +1189,25 @@ class CamoufoxRegistrationBot:
         
         # #region agent log
         import json as _json
-        _log_path = r"d:\projects\codex\.cursor\debug.log"
+        import os as _os
+        _log_path = "/tmp/camoufox_debug.log" if _os.name != "nt" else r"d:\projects\codex\.cursor\debug.log"
         def _dbg(loc, msg, data, hyp):
-            with open(_log_path, "a", encoding="utf-8") as _f:
-                _f.write(_json.dumps({"location": loc, "message": msg, "data": data, "hypothesisId": hyp, "timestamp": int(time.time()*1000), "sessionId": "debug-session"}) + "\n")
+            try:
+                with open(_log_path, "a", encoding="utf-8") as _f:
+                    _f.write(_json.dumps({"location": loc, "message": msg, "data": data, "hypothesisId": hyp, "timestamp": int(time.time()*1000), "sessionId": "debug-session"}) + "\n")
+            except: pass
         # #endregion
         
         try:
-            # Camoufox 配置 - 参考 codex.py 使用 geoip=True 而不是传入 IP
+            # Camoufox 配置 - 参考 codex.py 的简单配置
             camoufox_kwargs = {
                 "headless": getattr(config, "CAMOUFOX_HEADLESS", config.HEADLESS_MODE),
-                "humanize": True,  # 启用人性化鼠标移动
-                "i_know_what_im_doing": True,  # 禁止 COOP 警告
-                "os": getattr(config, "CAMOUFOX_OS", "windows"),
+                "geoip": True,  # 参考 codex.py: 使用 True 自动检测
             }
             
             # 添加代理
             if proxy_config:
                 camoufox_kwargs["proxy"] = proxy_config
-            
-            # GeoIP 配置 - 使用 True 自动检测，而不是手动指定 IP
-            # 参考 codex.py 的实现: geoip=True
-            camoufox_kwargs["geoip"] = True
             
             # #region agent log
             _dbg("register:camoufox_config", "Camoufox配置", {"kwargs": {k: str(v) if k == "proxy" else v for k, v in camoufox_kwargs.items()}, "original_geoip_target": geoip_target}, "A")
@@ -1225,8 +1222,8 @@ class CamoufoxRegistrationBot:
                 _dbg("register:browser_started", "浏览器已启动", {}, "D")
                 # #endregion
                 
-                # 访问 ChatGPT
-                url = "https://chatgpt.com"
+                # 访问 ChatGPT - 参考 codex.py
+                url = "https://chat.openai.com/chat"
                 logger.info(f"🌐 访问 {url}...")
                 await page.goto(url)
                 
@@ -1237,75 +1234,47 @@ class CamoufoxRegistrationBot:
                 
                 await asyncio.sleep(3)
                 
-                # 等待 Cloudflare 验证完成
-                cf_result = await self.wait_for_cloudflare(page, timeout=60)
-                
-                # #region agent log
-                post_cf_url = page.url
-                _dbg("register:post_cf_check", "CF检查完成后", {"cf_result": cf_result, "url": post_cf_url}, "C")
-                # #endregion
-                
-                await asyncio.sleep(2)
-                
-                # 再次检查页面状态
-                page_content = await page.content()
-                page_title = await page.title()
-                
-                # #region agent log
-                _dbg("register:page_state", "页面状态", {"title": page_title, "url": page.url, "content_length": len(page_content)}, "E")
-                # #endregion
-                
                 if config.SAVE_SCREENSHOTS:
                     await page.screenshot(path="camoufox_page_start.png")
+                    logger.info("📸 截图已保存")
                 
-                # 点击注册按钮
-                logger.info("🖱️ 点击注册按钮...")
+                # 参考 codex.py: 直接等待注册按钮出现（长超时）
+                logger.info("🖱️ 等待注册按钮出现...")
                 
-                signup_selectors = [
-                    '[data-testid="signup-button"]',
-                    '[data-testid="sign-up-button"]',
-                    'a[href*="signup"]',
-                    'a[href*="sign-up"]',
-                ]
-                
-                # #region agent log
-                _dbg("register:signup_attempt", "尝试点击注册按钮", {"selectors": signup_selectors}, "E")
-                # #endregion
-                
-                signup_clicked = await self.click_first_visible(page, signup_selectors, timeout=20)
-                
-                # #region agent log
-                _dbg("register:signup_result", "注册按钮点击结果", {"signup_clicked": signup_clicked, "url": page.url}, "E")
-                # #endregion
-                
-                if not signup_clicked:
-                    # 尝试通过文本查找
-                    try:
-                        signup_link = page.get_by_text("Sign up", exact=False).first
-                        if await signup_link.is_visible():
-                            await signup_link.click()
-                            signup_clicked = True
-                            # #region agent log
-                            _dbg("register:signup_text_click", "通过文本点击注册", {"success": True}, "E")
-                            # #endregion
-                    except Exception as e:
-                        # #region agent log
-                        _dbg("register:signup_text_error", "文本点击失败", {"error": str(e)}, "E")
-                        # #endregion
-                        pass
-                
-                if not signup_clicked:
-                    # 直接访问注册页面
-                    logger.info("🔗 直接访问注册页面...")
+                try:
+                    signup_button = await page.wait_for_selector(
+                        '[data-testid="signup-button"]',
+                        state="visible",
+                        timeout=180000  # 3 分钟
+                    )
+                    
                     # #region agent log
-                    _dbg("register:direct_signup", "直接访问注册页面", {}, "E")
+                    _dbg("register:signup_button_found", "注册按钮已找到", {"url": page.url}, "E")
                     # #endregion
-                    await page.goto("https://chatgpt.com/auth/signup")
-                    await asyncio.sleep(3)
-                    cf_result2 = await self.wait_for_cloudflare(page, timeout=30)
+                    
+                    logger.info("✅ 注册按钮已出现，点击...")
+                    await signup_button.click()
+                    logger.info("✅ 已点击注册按钮")
+                    
+                except Exception as e:
+                    logger.warning(f"⚠️ 等待注册按钮失败: {e}")
                     # #region agent log
-                    _dbg("register:direct_signup_cf", "直接注册页CF检查", {"cf_result": cf_result2, "url": page.url}, "C")
+                    _dbg("register:signup_button_timeout", "注册按钮等待失败", {"error": str(e), "url": page.url}, "E")
                     # #endregion
+                    
+                    # 尝试其他选择器
+                    signup_selectors = [
+                        '[data-testid="sign-up-button"]',
+                        'a[href*="signup"]',
+                        'a[href*="sign-up"]',
+                    ]
+                    signup_clicked = await self.click_first_visible(page, signup_selectors, timeout=20)
+                    
+                    if not signup_clicked:
+                        # 直接访问注册页面
+                        logger.info("🔗 直接访问注册页面...")
+                        await page.goto("https://chatgpt.com/auth/signup")
+                        await asyncio.sleep(5)
                 
                 await asyncio.sleep(3)
                 
@@ -1330,9 +1299,13 @@ class CamoufoxRegistrationBot:
                     logger.error("❌ 未找到邮箱输入框")
                     return email, password, False
                 
-                # 点击继续
-                continue_btn = page.locator('button[type="submit"]').first
-                await continue_btn.click()
+                # 点击继续（输入邮箱后）
+                try:
+                    continue_btn = page.locator('button[type="submit"]').first
+                    await continue_btn.click()
+                    logger.info("✅ 邮箱输入后点击继续")
+                except Exception as e:
+                    logger.debug(f"点击继续按钮异常（可能页面已导航）: {e}")
                 await asyncio.sleep(2)
                 
                 # 输入密码
@@ -1351,8 +1324,22 @@ class CamoufoxRegistrationBot:
                     logger.error("❌ 未找到密码输入框")
                     return email, password, False
                 
-                # 点击继续
-                await continue_btn.click()
+                # 点击继续（输入密码后）- 重新获取按钮！
+                try:
+                    continue_btn = page.locator('button[type="submit"]').first
+                    # 等待按钮可点击
+                    await continue_btn.wait_for(state="visible", timeout=10000)
+                    await continue_btn.click()
+                    logger.info("✅ 密码输入后点击继续")
+                except Exception as e:
+                    # 如果点击失败，检查是否已经导航到验证码页面
+                    logger.debug(f"点击继续按钮异常: {e}")
+                    current_url = page.url
+                    if "email-verification" in current_url or "verify" in current_url:
+                        logger.info("✅ 页面已导航到验证码页面")
+                    else:
+                        logger.warning(f"⚠️ 页面状态未知: {current_url}")
+                
                 await asyncio.sleep(3)
                 
                 # 等待验证码
@@ -1381,29 +1368,46 @@ class CamoufoxRegistrationBot:
                 if code_input:
                     await code_input.fill(verification_code)
                     await asyncio.sleep(2)
+                else:
+                    logger.warning("⚠️ 未找到验证码输入框，检查页面状态...")
                 
-                # 点击继续
-                continue_btn = page.locator('button[type="submit"]').first
-                await continue_btn.click()
+                # 点击继续（验证码后）
+                try:
+                    continue_btn = page.locator('button[type="submit"]').first
+                    await continue_btn.wait_for(state="visible", timeout=10000)
+                    await continue_btn.click()
+                    logger.info("✅ 验证码输入后点击继续")
+                except Exception as e:
+                    logger.debug(f"点击继续按钮异常（可能页面已导航）: {e}")
                 await asyncio.sleep(3)
                 
                 # 输入姓名
                 logger.info("👤 输入姓名...")
                 try:
-                    name_input = page.locator('input[name="name"], input[autocomplete="name"]').first
-                    if await name_input.is_visible():
+                    name_input = await self.wait_for_selector_any(
+                        page, 
+                        ['input[name="name"]', 'input[autocomplete="name"]'], 
+                        timeout=30000
+                    )
+                    if name_input:
                         await name_input.fill("John Doe")
                         await asyncio.sleep(1)
+                        logger.info("✅ 姓名已输入")
                 except Exception as e:
-                    logger.debug(f"姓名输入失败: {e}")
+                    logger.debug(f"姓名输入失败（可能已跳过）: {e}")
                 
                 # 输入生日
                 await self.input_birthday(page)
                 await asyncio.sleep(1)
                 
                 # 点击最后的继续按钮
-                continue_btn = page.locator('button[type="submit"]').first
-                await continue_btn.click()
+                try:
+                    continue_btn = page.locator('button[type="submit"]').first
+                    await continue_btn.wait_for(state="visible", timeout=10000)
+                    await continue_btn.click()
+                    logger.info("✅ 最后的继续按钮已点击")
+                except Exception as e:
+                    logger.debug(f"点击最后继续按钮异常（可能页面已导航）: {e}")
                 await asyncio.sleep(5)
                 
                 logger.info("✅ 注册流程完成")
