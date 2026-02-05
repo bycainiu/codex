@@ -444,10 +444,22 @@ class CamoufoxRegistrationBot:
 
     @staticmethod
     def build_proxy_dict(proxy_addr: Optional[str]) -> Dict[str, str]:
-        """根据代理地址构造requests代理字典"""
+        """根据代理地址构造requests代理字典（包含认证信息）"""
         if not proxy_addr:
             return {}
-        proxy_url = f"http://{proxy_addr}"
+        
+        # 如果代理地址已经包含认证信息（user:pass@host:port），直接使用
+        if '@' in proxy_addr:
+            proxy_url = f"http://{proxy_addr}"
+        else:
+            # 从 config 获取认证信息
+            username = getattr(config, "PROXY_USERNAME", "")
+            password = getattr(config, "PROXY_PASSWORD", "")
+            if username and password:
+                proxy_url = f"http://{username}:{password}@{proxy_addr}"
+            else:
+                proxy_url = f"http://{proxy_addr}"
+        
         return {"http": proxy_url, "https": proxy_url}
     
     @staticmethod
@@ -979,15 +991,54 @@ class CamoufoxRegistrationBot:
         """
         logger.info("🔐 开始OAuth登录流程...")
         
+        # #region agent log
+        import json as _json
+        _log_path = r"d:\projects\codex\.cursor\debug.log"
+        def _dbg_oauth(loc, msg, data, hyp):
+            try:
+                with open(_log_path, "a", encoding="utf-8") as _f:
+                    _f.write(_json.dumps({"location": loc, "message": msg, "data": data, "hypothesisId": hyp, "timestamp": int(time.time()*1000), "sessionId": "debug-session"}) + "\n")
+            except: pass
+        # #endregion
+        
         code_verifier, code_challenge = self.generate_pkce()
         state = self.generate_state()
         auth_url = self.build_authorize_url(code_challenge, state)
         
+        # #region agent log
+        _dbg_oauth("perform_oauth_login:start", "OAuth参数生成完成", {"auth_url": auth_url, "state": state[:20], "proxies": str(proxies)}, "A")
+        # #endregion
+        
         # 创建新页面
-        page = await browser_context.new_page()
+        page = None
+        try:
+            # #region agent log
+            _dbg_oauth("perform_oauth_login:before_new_page", "准备创建新页面", {"browser_context_type": str(type(browser_context))}, "C")
+            # #endregion
+            
+            page = await browser_context.new_page()
+            
+            # #region agent log
+            _dbg_oauth("perform_oauth_login:page_created", "新页面已创建", {"page_url": page.url}, "C")
+            # #endregion
+        except Exception as e:
+            # #region agent log
+            _dbg_oauth("perform_oauth_login:new_page_failed", "创建新页面失败", {"error": str(e), "error_type": type(e).__name__}, "C")
+            # #endregion
+            logger.error(f"❌ 创建新页面失败: {e}")
+            return None
         
         try:
-            await page.goto(auth_url)
+            # #region agent log
+            _dbg_oauth("perform_oauth_login:before_goto", "准备导航到OAuth URL", {"auth_url": auth_url}, "A")
+            # #endregion
+            
+            await page.goto(auth_url, timeout=60000)
+            
+            # #region agent log
+            _dbg_oauth("perform_oauth_login:after_goto", "导航成功", {"current_url": page.url}, "A")
+            # #endregion
+            
             await asyncio.sleep(3)
             
             # 等待 Cloudflare
@@ -1126,9 +1177,19 @@ class CamoufoxRegistrationBot:
                     return tokens
             
         except Exception as e:
+            # #region agent log
+            import traceback as _tb
+            _dbg_oauth("perform_oauth_login:exception", "OAuth登录异常", {
+                "error": str(e), 
+                "error_type": type(e).__name__,
+                "traceback": _tb.format_exc(),
+                "current_url": page.url if page else "N/A"
+            }, "A")
+            # #endregion
             logger.error(f"❌ OAuth登录异常: {e}")
         finally:
-            await page.close()
+            if page:
+                await page.close()
         
         return None
     
@@ -1306,10 +1367,27 @@ class CamoufoxRegistrationBot:
                     logger.info("✅ 邮箱输入后点击继续")
                 except Exception as e:
                     logger.debug(f"点击继续按钮异常（可能页面已导航）: {e}")
-                await asyncio.sleep(2)
+                
+                # 等待页面导航完成
+                await asyncio.sleep(3)
+                
+                # 等待页面稳定（检查是否有加载指示器）
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                except:
+                    pass
                 
                 # 输入密码
                 logger.info("🔑 输入密码...")
+                
+                # 先检查当前页面状态
+                current_url = page.url
+                logger.info(f"📍 当前页面: {current_url}")
+                
+                # #region agent log
+                _dbg("register:before_password", "准备输入密码", {"url": current_url}, "F")
+                # #endregion
+                
                 password_selectors = [
                     'input[autocomplete="new-password"]',
                     'input[type="password"]',
@@ -1321,7 +1399,30 @@ class CamoufoxRegistrationBot:
                     await password_input.fill(password)
                     await asyncio.sleep(2)
                 else:
+                    # 诊断：保存截图和页面内容
                     logger.error("❌ 未找到密码输入框")
+                    current_url = page.url
+                    page_content = await page.content()
+                    logger.error(f"📍 当前URL: {current_url}")
+                    logger.error(f"📄 页面内容长度: {len(page_content)}")
+                    
+                    # 保存截图用于诊断
+                    try:
+                        await page.screenshot(path="debug_no_password_input.png")
+                        logger.error("📸 已保存诊断截图: debug_no_password_input.png")
+                    except: pass
+                    
+                    # 检查是否有错误提示
+                    error_indicators = ["error", "invalid", "already", "exists", "taken"]
+                    page_lower = page_content.lower()
+                    matched_errors = [e for e in error_indicators if e in page_lower]
+                    if matched_errors:
+                        logger.error(f"⚠️ 页面可能包含错误: {matched_errors}")
+                    
+                    # #region agent log
+                    _dbg("register:password_not_found", "密码框未找到", {"url": current_url, "content_preview": page_content[:500], "matched_errors": matched_errors}, "F")
+                    # #endregion
+                    
                     return email, password, False
                 
                 # 点击继续（输入密码后）- 重新获取按钮！
@@ -1414,6 +1515,27 @@ class CamoufoxRegistrationBot:
                 
                 # OAuth 登录获取 tokens
                 logger.info("🔐 开始OAuth认证...")
+                
+                # #region agent log
+                # 测试网络连通性（通过requests检测代理是否可用）
+                _proxy_test_result = "N/A"
+                try:
+                    _test_session = requests.Session()
+                    _test_session.trust_env = False
+                    _test_resp = _test_session.get("https://auth.openai.com", proxies=request_proxies, timeout=10, verify=False)
+                    _proxy_test_result = f"HTTP {_test_resp.status_code}"
+                except Exception as _pe:
+                    _proxy_test_result = f"FAILED: {type(_pe).__name__}: {str(_pe)}"
+                
+                _dbg("register:before_oauth", "准备调用OAuth登录", {
+                    "browser_type": str(type(browser)),
+                    "browser_connected": browser.is_connected() if hasattr(browser, 'is_connected') else "N/A",
+                    "email": email,
+                    "request_proxies": str(request_proxies),
+                    "proxy_connectivity_test": _proxy_test_result
+                }, "A")
+                # #endregion
+                
                 tokens = await self.perform_oauth_login(
                     browser,
                     email,
