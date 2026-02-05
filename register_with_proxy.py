@@ -865,6 +865,350 @@ class OpenAIRegistrationBot:
             json.dump(data, f, ensure_ascii=False, indent=2)
         
         logger.info(f"✅ 账号JSON已保存到 {filename}")
+
+    def _navigate_to_cpa_oauth_page(self, driver: uc.Chrome, max_attempts: int = 6) -> bool:
+        for _ in range(max_attempts):
+            try:
+                driver.get(config.CPA_MANAGEMENT_URL)
+            except Exception:
+                pass
+            time.sleep(2)
+            if driver.find_elements(By.CSS_SELECTOR, "div.card"):
+                return True
+
+            try:
+                nav_candidates = driver.find_elements(
+                    By.XPATH,
+                    "//a[contains(., 'OAuth') or contains(., 'oauth') or contains(., '授权') or contains(., '认证')] | "
+                    "//button[contains(., 'OAuth') or contains(., 'oauth') or contains(., '授权') or contains(., '认证')]",
+                )
+                for el in nav_candidates:
+                    if not el.is_displayed():
+                        continue
+                    try:
+                        driver.execute_script("arguments[0].click();", el)
+                    except Exception:
+                        el.click()
+                    time.sleep(1)
+            except Exception:
+                pass
+
+            if driver.find_elements(By.CSS_SELECTOR, "div.card"):
+                return True
+
+        return False
+
+    def login_cpa_panel(self, driver: uc.Chrome) -> bool:
+        if not self._navigate_to_cpa_oauth_page(driver):
+            logger.error("❌ 打开CPA面板失败")
+            return False
+
+        if not config.CPA_PASSWORD:
+            return True
+
+        try:
+            pwd_input = self.wait_for_any_visible(
+                driver,
+                [(By.CSS_SELECTOR, 'input[type="password"]')],
+                timeout=8,
+            )
+            self.fill_input(driver, pwd_input, config.CPA_PASSWORD, char_delay=0.02)
+            login_selectors = [
+                (By.CSS_SELECTOR, "button.btn.btn-primary"),
+                (By.XPATH, "//button[contains(., 'Login') or contains(., '登录') or contains(., 'Sign in')]"),
+            ]
+            self.click_first_clickable(driver, login_selectors, timeout=8)
+            time.sleep(2)
+            return self._navigate_to_cpa_oauth_page(driver)
+        except TimeoutException:
+            # 可能已登录
+            return True
+        except Exception as e:
+            logger.error(f"❌ CPA登录失败: {e}")
+            return False
+
+    def _get_cpa_oauth_card(self, driver: uc.Chrome):
+        try:
+            cards = driver.find_elements(By.CSS_SELECTOR, "div.card, .card")
+            for card in cards:
+                text = (card.text or "").lower()
+                if "codex" in text or "openai" in text:
+                    return card
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def _extract_auth_url_from_text(text: str) -> Optional[str]:
+        if not text:
+            return None
+        urls = re.findall(
+            r'https://auth\.openai\.com/(?:oauth/)?authorize[^\s<>"\')]+',
+            text,
+        )
+        if urls:
+            return urls[0].replace("&amp;", "&")
+        return None
+
+    def _extract_auth_url_from_card(self, driver: uc.Chrome, card) -> Optional[str]:
+        try:
+            try:
+                link = card.find_element(By.CSS_SELECTOR, 'a[href*="auth.openai.com"]')
+                href = link.get_attribute("href")
+                if href:
+                    return href.replace("&amp;", "&")
+            except Exception:
+                pass
+
+            card_text = card.text
+            auth_url = self._extract_auth_url_from_text(card_text)
+            if auth_url:
+                return auth_url
+
+            page_source = driver.page_source
+            return self._extract_auth_url_from_text(page_source)
+        except Exception:
+            return None
+
+    def get_cpa_auth_link(self, driver: uc.Chrome) -> Optional[str]:
+        logger.info("🔗 获取CPA OAuth链接...")
+        if not self.login_cpa_panel(driver):
+            return None
+
+        card = self._get_cpa_oauth_card(driver)
+        if not card:
+            logger.error("❌ 未找到CPA OAuth卡片")
+            return None
+
+        auth_url = self._extract_auth_url_from_card(driver, card)
+        if auth_url:
+            return auth_url
+
+        # 尝试点击卡片中的登录/授权按钮以生成链接
+        try:
+            login_btns = card.find_elements(
+                By.XPATH,
+                ".//button[contains(., 'Login') or contains(., '登录') or contains(., '授权') or contains(., 'Authorize')] | "
+                ".//a[contains(., 'Login') or contains(., '登录') or contains(., '授权') or contains(., 'Authorize')]",
+            )
+            for btn in login_btns:
+                if not btn.is_displayed():
+                    continue
+                try:
+                    driver.execute_script("arguments[0].click();", btn)
+                except Exception:
+                    btn.click()
+                time.sleep(1)
+        except Exception:
+            pass
+
+        for _ in range(10):
+            time.sleep(1)
+            card = self._get_cpa_oauth_card(driver)
+            if not card:
+                continue
+            auth_url = self._extract_auth_url_from_card(driver, card)
+            if auth_url:
+                return auth_url
+
+        return None
+
+    def perform_openai_oauth_login_in_new_window(
+        self,
+        driver: uc.Chrome,
+        auth_link: str,
+        email: str,
+        password: str,
+    ) -> Optional[str]:
+        logger.info("🌐 在新窗口执行OAuth授权...")
+        original_window = driver.current_window_handle
+        driver.execute_script("window.open('', '_blank');")
+        driver.switch_to.window(driver.window_handles[-1])
+        driver.get(auth_link)
+        time.sleep(3)
+
+        start_time = time.time()
+        callback_url = None
+        email_entered = False
+        password_entered = False
+
+        while time.time() - start_time < config.CPA_OAUTH_TIMEOUT:
+            try:
+                current_url = driver.current_url
+                # 检测成功回调：必须包含 code= 参数
+                if ("localhost" in current_url or "127.0.0.1" in current_url):
+                    if "code=" in current_url:
+                        logger.info(f"✅ 获取CPA回调URL: {current_url[:60]}...")
+                        callback_url = current_url
+                        break
+
+                # 可能已经显示成功页
+                try:
+                    body_text = driver.find_element(By.TAG_NAME, "body").text
+                    if "Authentication successful" in body_text or "Token saved" in body_text:
+                        logger.info("✅ 检测到认证成功页面")
+                        callback_url = current_url
+                        break
+                except Exception:
+                    pass
+
+                # 邮箱输入（使用与注册流程一致的方式）
+                if not email_entered:
+                    email_selectors = [
+                        (By.CSS_SELECTOR, 'input[type="email"]'),
+                        (By.CSS_SELECTOR, 'input[name="email"]'),
+                        (By.ID, "email"),
+                        (By.CSS_SELECTOR, 'input[autocomplete="username"]'),
+                    ]
+                    for by, selector in email_selectors:
+                        try:
+                            email_input = self._find_visible_in_frames(driver, by, selector)
+                            if email_input and email_input.is_displayed():
+                                logger.info("📧 CPA OAuth: 输入邮箱...")
+                                self.fill_input(driver, email_input, email, char_delay=0.03)
+                                time.sleep(1)
+                                
+                                # 点击继续按钮
+                                continue_selectors = [
+                                    (By.CSS_SELECTOR, 'button[type="submit"]'),
+                                    (By.XPATH, "//button[contains(., 'Continue') or contains(., '继续')]"),
+                                ]
+                                try:
+                                    self.click_first_clickable(driver, continue_selectors, timeout=5)
+                                except TimeoutException:
+                                    try:
+                                        email_input.send_keys(Keys.ENTER)
+                                    except Exception:
+                                        pass
+                                
+                                email_entered = True
+                                time.sleep(3)
+                                break
+                        except Exception:
+                            continue
+
+                # 密码输入（使用与注册流程一致的方式）
+                if email_entered and not password_entered:
+                    password_selectors = [
+                        (By.CSS_SELECTOR, 'input[type="password"]'),
+                        (By.CSS_SELECTOR, 'input[name="password"]'),
+                        (By.CSS_SELECTOR, 'input[autocomplete="current-password"]'),
+                    ]
+                    for by, selector in password_selectors:
+                        try:
+                            password_input = self._find_visible_in_frames(driver, by, selector)
+                            if password_input and password_input.is_displayed():
+                                logger.info("🔑 CPA OAuth: 输入密码...")
+                                self.fill_input(driver, password_input, password, char_delay=0.03)
+                                time.sleep(1)
+                                
+                                # 点击继续按钮
+                                continue_selectors = [
+                                    (By.CSS_SELECTOR, 'button[type="submit"]'),
+                                    (By.XPATH, "//button[contains(., 'Continue') or contains(., '继续')]"),
+                                ]
+                                try:
+                                    self.click_first_clickable(driver, continue_selectors, timeout=5)
+                                except TimeoutException:
+                                    try:
+                                        password_input.send_keys(Keys.ENTER)
+                                    except Exception:
+                                        pass
+                                
+                                password_entered = True
+                                time.sleep(3)
+                                break
+                        except Exception:
+                            continue
+
+                # 授权/继续按钮（使用与注册流程一致的方式）
+                keywords = [
+                    "continue", "authorize", "allow", "yes", "accept", "confirm",
+                    "继续", "授权", "允许", "确定", "确认", "接受",
+                ]
+                try:
+                    btns = driver.find_elements(By.CSS_SELECTOR, "button")
+                    for btn in btns:
+                        try:
+                            if not btn.is_displayed():
+                                continue
+                            text = (btn.text or "").lower()
+                            # 跳过登录/注册按钮
+                            if any(x in text for x in ["login", "sign up", "登录", "注册"]):
+                                continue
+                            if any(k in text for k in keywords):
+                                logger.info(f"🔘 点击按钮: {btn.text}")
+                                try:
+                                    driver.execute_script("arguments[0].click();", btn)
+                                except Exception:
+                                    btn.click()
+                                time.sleep(1)
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+            except Exception as e:
+                logger.debug(f"CPA OAuth流程循环异常: {e}")
+
+            time.sleep(1)
+
+        try:
+            driver.close()
+            driver.switch_to.window(original_window)
+        except Exception:
+            pass
+
+        return callback_url
+
+    def submit_cpa_callback_via_api(self, callback_url: str) -> bool:
+        logger.info("📡 提交CPA回调...")
+        try:
+            parsed = urlparse(callback_url)
+            params = parse_qs(parsed.query)
+            state = params.get("state", [None])[0]
+            if not state:
+                logger.info("✅ 未找到state参数，视为授权已完成")
+                return True
+
+            api_endpoint = f"{config.CPA_API_BASE}/v0/management/oauth-callback"
+            payload = {"provider": "codex", "redirect_url": callback_url, "state": state}
+            headers = {"Content-Type": "application/json"}
+            if config.CPA_PASSWORD:
+                headers["Authorization"] = f"Bearer {config.CPA_PASSWORD}"
+                headers["X-Management-Key"] = config.CPA_PASSWORD
+
+            session = requests.Session()
+            session.trust_env = False
+            res = session.post(api_endpoint, json=payload, headers=headers, timeout=30)
+            if res.status_code == 200 and res.json().get("status") == "ok":
+                logger.info("✅ CPA回调提交成功")
+                return True
+            if res.status_code == 404 and "expired" in res.text.lower():
+                logger.info("✅ CPA提示state已过期，可能已自动完成授权")
+                return True
+            logger.error(f"❌ CPA回调提交失败: {res.status_code} - {res.text[:200]}")
+        except Exception as e:
+            logger.error(f"❌ CPA回调提交异常: {e}")
+        return False
+
+    def import_to_cpa(self, driver: uc.Chrome, email: str, password: str) -> bool:
+        auth_link = self.get_cpa_auth_link(driver)
+        if not auth_link:
+            logger.error("❌ 获取CPA授权链接失败")
+            return False
+
+        callback_url = self.perform_openai_oauth_login_in_new_window(
+            driver,
+            auth_link,
+            email,
+            password,
+        )
+        if not callback_url:
+            logger.error("❌ 未获取CPA回调URL")
+            return False
+
+        return self.submit_cpa_callback_via_api(callback_url)
     
     def perform_oauth_login(
         self,
@@ -899,92 +1243,159 @@ class OpenAIRegistrationBot:
         driver.get(auth_url)
         time.sleep(3)
         
+        start_time = time.time()
+        max_wait = config.OAUTH_CALLBACK_TIMEOUT
+        callback_url = None
+        email_entered = False
+        password_entered = False
+        verification_handled = False  # 防止重复处理二次验证
+        
         try:
-            # 输入邮箱
-            logger.info("📧 输入邮箱...")
-            email_input = WebDriverWait(driver, 30).until(
-                EC.visibility_of_element_located(
-                    (By.CSS_SELECTOR, 'input[type="email"], input[name="email"], input[id="email"]')
-                )
-            )
-            email_input.clear()
-            time.sleep(0.3)
-            for char in email:
-                email_input.send_keys(char)
-                time.sleep(0.03)
-            
-            # 点击继续
-            continue_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]'))
-            )
-            driver.execute_script("arguments[0].click();", continue_btn)
-            time.sleep(3)
-            
-            # 输入密码
-            logger.info("🔑 输入密码...")
-            password_input = WebDriverWait(driver, 30).until(
-                EC.visibility_of_element_located(
-                    (By.CSS_SELECTOR, 'input[type="password"], input[name="password"]')
-                )
-            )
-            password_input.clear()
-            time.sleep(0.3)
-            for char in password:
-                password_input.send_keys(char)
-                time.sleep(0.03)
-            
-            # 点击继续
-            continue_btn = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]'))
-            )
-            driver.execute_script("arguments[0].click();", continue_btn)
-            time.sleep(3)
-            
-            # 检查是否需要二次验证
-            current_url = driver.current_url
-            if "email-verification" in current_url and jwt_token:
-                logger.info("🔐 检测到二次邮箱验证...")
-                verification_code = self.wait_for_verification_email(
-                    email,
-                    jwt_token,
-                    proxies=proxies
-                )
-                
-                if verification_code:
-                    logger.info(f"✅ 获取到验证码: {verification_code}")
-                    try:
-                        code_inputs = driver.find_elements(
-                            By.CSS_SELECTOR, 
-                            'input[type="text"], input[inputmode="numeric"]'
+            while time.time() - start_time < max_wait:
+                try:
+                    current_url = driver.current_url
+                    
+                    # 检查是否已经回调
+                    if "callback" in current_url and "code=" in current_url:
+                        parsed = urlparse(current_url)
+                        params = parse_qs(parsed.query)
+                        url_state = params.get("state", [None])[0]
+                        if url_state == state:
+                            logger.info("✅ 收到OAuth回调")
+                            callback_url = current_url
+                            break
+                    
+                    # 输入邮箱（使用与注册流程一致的方式）
+                    if not email_entered:
+                        email_selectors = [
+                            (By.CSS_SELECTOR, 'input[type="email"]'),
+                            (By.CSS_SELECTOR, 'input[name="email"]'),
+                            (By.ID, "email"),
+                            (By.CSS_SELECTOR, 'input[autocomplete="username"]'),
+                        ]
+                        for by, selector in email_selectors:
+                            try:
+                                email_input = self._find_visible_in_frames(driver, by, selector)
+                                if email_input and email_input.is_displayed():
+                                    logger.info("📧 输入邮箱...")
+                                    self.fill_input(driver, email_input, email, char_delay=0.03)
+                                    time.sleep(1)
+                                    
+                                    # 点击继续按钮
+                                    continue_selectors = [
+                                        (By.CSS_SELECTOR, 'button[type="submit"]'),
+                                        (By.XPATH, "//button[contains(., 'Continue') or contains(., '继续')]"),
+                                    ]
+                                    try:
+                                        self.click_first_clickable(driver, continue_selectors, timeout=5)
+                                    except TimeoutException:
+                                        try:
+                                            email_input.send_keys(Keys.ENTER)
+                                        except Exception:
+                                            pass
+                                    
+                                    email_entered = True
+                                    time.sleep(3)
+                                    break
+                            except Exception:
+                                continue
+                    
+                    # 输入密码（使用与注册流程一致的方式）
+                    if email_entered and not password_entered:
+                        password_selectors = [
+                            (By.CSS_SELECTOR, 'input[type="password"]'),
+                            (By.CSS_SELECTOR, 'input[name="password"]'),
+                            (By.CSS_SELECTOR, 'input[autocomplete="current-password"]'),
+                        ]
+                        for by, selector in password_selectors:
+                            try:
+                                password_input = self._find_visible_in_frames(driver, by, selector)
+                                if password_input and password_input.is_displayed():
+                                    logger.info("🔑 输入密码...")
+                                    self.fill_input(driver, password_input, password, char_delay=0.03)
+                                    time.sleep(1)
+                                    
+                                    # 点击继续按钮
+                                    continue_selectors = [
+                                        (By.CSS_SELECTOR, 'button[type="submit"]'),
+                                        (By.XPATH, "//button[contains(., 'Continue') or contains(., '继续')]"),
+                                    ]
+                                    try:
+                                        self.click_first_clickable(driver, continue_selectors, timeout=5)
+                                    except TimeoutException:
+                                        try:
+                                            password_input.send_keys(Keys.ENTER)
+                                        except Exception:
+                                            pass
+                                    
+                                    password_entered = True
+                                    time.sleep(3)
+                                    break
+                            except Exception:
+                                continue
+                    
+                    # 检查是否需要二次邮箱验证（只处理一次）
+                    current_url = driver.current_url
+                    if "email-verification" in current_url and jwt_token and not verification_handled:
+                        logger.info("🔐 检测到二次邮箱验证...")
+                        verification_handled = True  # 标记已处理，防止重复
+                        verification_code = self.wait_for_verification_email(
+                            email,
+                            jwt_token,
+                            timeout=60,
+                            proxies=proxies
                         )
                         
-                        if len(code_inputs) >= 6:
-                            for i, digit in enumerate(verification_code[:6]):
-                                code_inputs[i].send_keys(digit)
-                                time.sleep(0.1)
-                        elif code_inputs:
-                            code_inputs[0].clear()
-                            code_inputs[0].send_keys(verification_code)
-                        
-                        time.sleep(2)
-                        
-                        try:
-                            continue_btn = WebDriverWait(driver, 5).until(
-                                EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]'))
-                            )
-                            driver.execute_script("arguments[0].click();", continue_btn)
+                        if verification_code:
+                            logger.info(f"✅ 获取到验证码: {verification_code}")
+                            code_selectors = [
+                                (By.CSS_SELECTOR, 'input[name="code"]'),
+                                (By.CSS_SELECTOR, 'input[inputmode="numeric"]'),
+                                (By.CSS_SELECTOR, 'input[type="text"]'),
+                            ]
+                            for by, selector in code_selectors:
+                                try:
+                                    code_inputs = driver.find_elements(by, selector)
+                                    if len(code_inputs) >= 6:
+                                        # 多个输入框，逐个填入
+                                        for i, digit in enumerate(verification_code[:6]):
+                                            self.fill_input(driver, code_inputs[i], digit, char_delay=0.05)
+                                            time.sleep(0.1)
+                                        break
+                                    elif code_inputs:
+                                        # 单个输入框
+                                        self.fill_input(driver, code_inputs[0], verification_code, char_delay=0.05)
+                                        break
+                                except Exception:
+                                    continue
+                            
+                            time.sleep(2)
+                            # 尝试点击继续按钮
+                            try:
+                                continue_selectors = [
+                                    (By.CSS_SELECTOR, 'button[type="submit"]'),
+                                ]
+                                self.click_first_clickable(driver, continue_selectors, timeout=5)
+                            except TimeoutException:
+                                pass
                             time.sleep(3)
-                        except:
-                            pass
-                    except Exception as e:
-                        logger.error(f"❌ 输入验证码失败: {e}")
-            
-            # 等待回调
-            callback_url = self.wait_for_callback_url(driver, state)
+                        else:
+                            logger.warning("⚠️ 未获取到二次验证码")
+                    
+                    # 尝试点击授权/继续按钮
+                    self.try_click_oauth_consent(driver)
+                    
+                except Exception as e:
+                    logger.debug(f"OAuth流程循环异常: {e}")
+                
+                time.sleep(1)
             
             # 关闭标签页
-            driver.close()
-            driver.switch_to.window(original_window)
+            try:
+                driver.close()
+                driver.switch_to.window(original_window)
+            except Exception:
+                pass
             
             if not callback_url:
                 logger.error("❌ 未收到OAuth回调")
@@ -1243,7 +1654,19 @@ class OpenAIRegistrationBot:
             continue_btn.click()
             time.sleep(5)
             
-            logger.info("✅ 注册流程完成，开始OAuth认证...")
+            logger.info("✅ 注册流程完成")
+
+            if config.USE_CPA_IMPORT:
+                logger.info("🔗 开始导入CPA...")
+                try:
+                    if self.import_to_cpa(driver, email, password):
+                        logger.info("✅ CPA导入成功")
+                    else:
+                        logger.warning("⚠️ CPA导入失败")
+                except Exception as e:
+                    logger.error(f"❌ CPA导入异常: {e}")
+
+            logger.info("🔐 开始OAuth认证...")
             
             # 关闭当前驱动，创建新的驱动进行OAuth
             driver.quit()

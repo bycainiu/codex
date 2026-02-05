@@ -23,6 +23,12 @@ OAUTH_ISSUER = "https://auth.openai.com"
 OAUTH_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback"
 
+# ==================== CPA 导入配置 ====================
+USE_CPA_IMPORT = True
+CPA_MANAGEMENT_URL = "http://127.0.0.1:8317/management.html#/oauth"
+CPA_API_BASE = "http://127.0.0.1:8317"
+CPA_PASSWORD = ""
+
 # ==================== 代理配置 ====================
 # 是否为Selenium配置代理
 USE_PROXY = True
@@ -69,6 +75,7 @@ CHROME_BINARY = os.getenv("CHROME_BINARY", "")
 EMAIL_VERIFICATION_TIMEOUT = 120
 OAUTH_CALLBACK_TIMEOUT = 60
 PAGE_LOAD_TIMEOUT = 30
+CPA_OAUTH_TIMEOUT = 120
 
 # ==================== 重试配置 ====================
 MAX_ERROR_RETRIES = 5
