@@ -42,12 +42,13 @@ def main() -> int:
     }
 
     try:
-        res = requests.get(
+        session = requests.Session()
+        session.trust_env = False
+        res = session.get(
             "https://ipinfo.io/ip",
             proxies=proxies,
             timeout=20,
-            verify=False,
-            trust_env=False
+            verify=False
         )
         if res.status_code != 200:
             print(f"ERROR: 代理请求失败 HTTP {res.status_code}")

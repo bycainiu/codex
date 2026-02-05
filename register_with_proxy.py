@@ -208,8 +208,11 @@ class OpenAIRegistrationBot:
             if proxies is None:
                 proxies = self.get_duckmail_proxies()
             
+            session = requests.Session()
+            session.trust_env = False
+
             # 创建邮箱账户
-            res = requests.post(
+            res = session.post(
                 f"{config.DUCKMAIL_API_URL}/accounts",
                 json={
                     "address": email_address,
@@ -221,8 +224,7 @@ class OpenAIRegistrationBot:
                 },
                 timeout=10,
                 verify=False,
-                proxies=proxies,
-                trust_env=False
+                proxies=proxies
             )
             
             if res.status_code != 201:
@@ -230,7 +232,7 @@ class OpenAIRegistrationBot:
                 return None, None
             
             # 获取认证Token
-            token_res = requests.post(
+            token_res = session.post(
                 f"{config.DUCKMAIL_API_URL}/token",
                 json={
                     "address": email_address,
@@ -239,8 +241,7 @@ class OpenAIRegistrationBot:
                 headers={"Content-Type": "application/json"},
                 timeout=10,
                 verify=False,
-                proxies=proxies,
-                trust_env=False
+                proxies=proxies
             )
             
             if token_res.status_code == 200:
@@ -275,16 +276,18 @@ class OpenAIRegistrationBot:
         try:
             if proxies is None:
                 proxies = self.get_duckmail_proxies()
+
+            session = requests.Session()
+            session.trust_env = False
             
-            res = requests.get(
+            res = session.get(
                 f"{config.DUCKMAIL_API_URL}/messages",
                 headers={
                     "Authorization": f"Bearer {jwt_token}",
                     "Content-Type": "application/json"
                 },
                 verify=False,
-                proxies=proxies,
-                trust_env=False
+                proxies=proxies
             )
             
             if res.status_code == 200:
@@ -401,12 +404,14 @@ class OpenAIRegistrationBot:
                                 
                                 if proxies is None:
                                     proxies = self.get_duckmail_proxies()
-                                res = requests.get(
+
+                                session = requests.Session()
+                                session.trust_env = False
+                                res = session.get(
                                     full_url,
                                     headers={"Authorization": f"Bearer {jwt_token}"},
                                     verify=False,
-                                    proxies=proxies,
-                                    trust_env=False
+                                    proxies=proxies
                                 )
                                 
                                 if res.status_code == 200:
@@ -479,7 +484,9 @@ class OpenAIRegistrationBot:
             if proxies is None:
                 proxies = self.get_proxies_dict()
             
-            response = requests.post(
+            session = requests.Session()
+            session.trust_env = False
+            response = session.post(
                 f"{config.OAUTH_ISSUER}/oauth/token",
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
                 data={
@@ -491,8 +498,7 @@ class OpenAIRegistrationBot:
                 },
                 proxies=proxies,
                 verify=False,
-                timeout=30,
-                trust_env=False
+                timeout=30
             )
             
             if response.status_code == 200:

@@ -100,18 +100,20 @@ class ProxyManager:
         if local_proxy_url:
             proxies = {"http": local_proxy_url, "https": local_proxy_url}
 
+        session = requests.Session()
+        session.trust_env = False
+
         for attempt in range(max(1, retries)):
             for url in urls:
                 try:
                     logger.info(f"🌐 正在通过API获取代理IP: {url}")
-                    response = requests.get(
+                    response = session.get(
                         url,
                         params=self.proxy_api_params,
                         headers=headers,
                         timeout=15,
                         verify=False,
-                        proxies=proxies,
-                        trust_env=False
+                        proxies=proxies
                     )
 
                     if response.status_code != 200:
