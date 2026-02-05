@@ -19,6 +19,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import TimeoutException, WebDriverException
 # webdriver_manager removed - uc manages its own driver
 import time
 import requests
@@ -197,6 +198,119 @@ class OpenAIRegistrationBot:
             return None
 
         return None
+
+    def _find_visible_in_frames(self, driver, by, selector):
+        """在主文档及iframe中查找可见元素。"""
+        try:
+            driver.switch_to.default_content()
+        except Exception:
+            pass
+
+        try:
+            el = driver.find_element(by, selector)
+            if el.is_displayed():
+                return el
+        except Exception:
+            pass
+
+        try:
+            iframes = driver.find_elements(By.TAG_NAME, "iframe")
+        except Exception:
+            iframes = []
+
+        for frame in iframes:
+            try:
+                driver.switch_to.default_content()
+                driver.switch_to.frame(frame)
+                el = driver.find_element(by, selector)
+                if el.is_displayed():
+                    return el
+            except Exception:
+                continue
+            finally:
+                try:
+                    driver.switch_to.default_content()
+                except Exception:
+                    pass
+
+        return None
+
+    def wait_for_any_visible(self, driver, selectors, timeout=60, poll=0.5):
+        """等待多个选择器之一可见，支持iframe。"""
+        end_time = time.time() + timeout
+        last_error = None
+        while time.time() < end_time:
+            for by, selector in selectors:
+                try:
+                    el = self._find_visible_in_frames(driver, by, selector)
+                    if el:
+                        return el
+                except Exception as e:
+                    last_error = e
+            time.sleep(poll)
+        selector_str = ", ".join([f"{by}={sel}" for by, sel in selectors])
+        raise TimeoutException(f"等待元素超时: {selector_str}") from last_error
+
+    def click_first_clickable(self, driver, selectors, timeout=30, poll=0.5):
+        """点击首个可点击的元素，失败则抛出TimeoutException。"""
+        end_time = time.time() + timeout
+        last_error = None
+        while time.time() < end_time:
+            for by, selector in selectors:
+                try:
+                    el = self._find_visible_in_frames(driver, by, selector)
+                    if not el:
+                        continue
+                    if el.is_enabled():
+                        try:
+                            driver.execute_script(
+                                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                                el,
+                            )
+                        except Exception:
+                            pass
+                        try:
+                            el.click()
+                        except WebDriverException:
+                            driver.execute_script("arguments[0].click();", el)
+                        return True
+                except Exception as e:
+                    last_error = e
+            time.sleep(poll)
+        selector_str = ", ".join([f"{by}={sel}" for by, sel in selectors])
+        raise TimeoutException(f"点击元素超时: {selector_str}") from last_error
+
+    def fill_input(self, driver, element, value, char_delay=0.05):
+        """稳健输入：优先逐字输入，失败则用JS赋值并触发事件。"""
+        try:
+            element.click()
+        except Exception:
+            pass
+
+        try:
+            element.clear()
+        except Exception:
+            pass
+
+        try:
+            for char in value:
+                element.send_keys(char)
+                time.sleep(char_delay)
+            return True
+        except WebDriverException:
+            pass
+
+        try:
+            driver.execute_script(
+                "arguments[0].value = arguments[1];"
+                "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));"
+                "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                element,
+                value,
+            )
+            return True
+        except Exception:
+            return False
     
     def get_proxies_dict(self) -> Dict[str, str]:
         """
@@ -958,49 +1072,55 @@ class OpenAIRegistrationBot:
             
             # 点击注册按钮
             logger.info("🖱️ 点击注册按钮...")
-            signup_button = WebDriverWait(driver, 60).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, '[data-testid="signup-button"]'))
-            )
-            signup_button.click()
-            time.sleep(2)
+            signup_selectors = [
+                (By.CSS_SELECTOR, '[data-testid="signup-button"]'),
+                (By.XPATH, "//a[contains(., 'Sign up') or contains(., '注册') or contains(., 'Sign Up')]"),
+                (By.XPATH, "//button[contains(., 'Sign up') or contains(., '注册') or contains(., 'Sign Up')]"),
+            ]
+            try:
+                self.click_first_clickable(driver, signup_selectors, timeout=20)
+                time.sleep(2)
+            except TimeoutException:
+                logger.warning("⚠️ 未找到注册按钮，尝试直接打开注册页...")
+                driver.get("https://chat.openai.com/auth/signup")
+                time.sleep(2)
             
             # 输入邮箱
             logger.info("📧 输入邮箱...")
-            email_input = WebDriverWait(driver, 60).until(
-                EC.visibility_of_element_located((By.ID, "email"))
-            )
-            email_input.clear()
-            email_input.send_keys(email)
+            email_selectors = [
+                (By.ID, "email"),
+                (By.CSS_SELECTOR, 'input[type="email"]'),
+                (By.CSS_SELECTOR, 'input[name="email"]'),
+                (By.CSS_SELECTOR, 'input[autocomplete="username"]'),
+            ]
+            email_input = self.wait_for_any_visible(driver, email_selectors, timeout=60)
+            self.fill_input(driver, email_input, email, char_delay=0.03)
             time.sleep(1)
             
             # 点击继续
-            continue_btn = WebDriverWait(driver, 30).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]'))
-            )
-            continue_btn.click()
+            continue_selectors = [
+                (By.CSS_SELECTOR, 'button[type="submit"]'),
+                (By.XPATH, "//button[contains(., 'Continue') or contains(., 'Next') or contains(., '继续') or contains(., '下一步')]"),
+            ]
+            self.click_first_clickable(driver, continue_selectors, timeout=30)
             time.sleep(2)
             
             # 输入密码
             logger.info("🔑 输入密码...")
-            password_input = WebDriverWait(driver, 60).until(
-                EC.visibility_of_element_located(
-                    (By.CSS_SELECTOR, 'input[autocomplete="new-password"]')
-                )
-            )
-            password_input.clear()
-            time.sleep(0.5)
-            for char in password:
-                password_input.send_keys(char)
-                time.sleep(0.05)
+            password_selectors = [
+                (By.CSS_SELECTOR, 'input[autocomplete="new-password"]'),
+                (By.CSS_SELECTOR, 'input[type="password"]'),
+                (By.CSS_SELECTOR, 'input[name="password"]'),
+            ]
+            password_input = self.wait_for_any_visible(driver, password_selectors, timeout=60)
+            time.sleep(0.3)
+            self.fill_input(driver, password_input, password, char_delay=0.03)
             time.sleep(2)
             
             # 点击继续
             for attempt in range(3):
                 try:
-                    continue_btn = WebDriverWait(driver, 30).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]'))
-                    )
-                    driver.execute_script("arguments[0].click();", continue_btn)
+                    self.click_first_clickable(driver, continue_selectors, timeout=30)
                     break
                 except:
                     time.sleep(2)
@@ -1027,16 +1147,14 @@ class OpenAIRegistrationBot:
             logger.info("🔢 输入验证码...")
             self.check_and_handle_error(driver)
             
-            code_input = WebDriverWait(driver, 60).until(
-                EC.visibility_of_element_located(
-                    (By.CSS_SELECTOR, 'input[name="code"], input[placeholder*="代码"]')
-                )
-            )
-            code_input.clear()
-            time.sleep(0.5)
-            for char in verification_code:
-                code_input.send_keys(char)
-                time.sleep(0.1)
+            code_selectors = [
+                (By.CSS_SELECTOR, 'input[name="code"]'),
+                (By.CSS_SELECTOR, 'input[placeholder*="代码"]'),
+                (By.CSS_SELECTOR, 'input[inputmode="numeric"]'),
+            ]
+            code_input = self.wait_for_any_visible(driver, code_selectors, timeout=60)
+            time.sleep(0.3)
+            self.fill_input(driver, code_input, verification_code, char_delay=0.05)
             time.sleep(2)
             
             # 点击继续
@@ -1180,6 +1298,11 @@ class OpenAIRegistrationBot:
         
         except Exception as e:
             logger.error(f"❌ 注册过程发生异常: {e}")
+            if config.SAVE_SCREENSHOTS and driver:
+                try:
+                    driver.save_screenshot("register_error.png")
+                except Exception:
+                    pass
             if email and password:
                 self.save_account(email, password)
         
