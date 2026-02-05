@@ -759,7 +759,365 @@ class OpenAIRegistrationBot:
 
         return False
     
-    def check_and_handle_error(self, driver: uc.Chrome, max_retries: int = None) -> bool:
+    def _input_birthday_method1(self, driver: uc.Chrome) -> bool:
+        """生日输入方式1: data-type属性选择器"""
+        try:
+            # 尝试找到年份输入框
+            year_selectors = [
+                '[data-type="year"]',
+                'input[name="year"]',
+                'input[placeholder*="年"]',
+                'input[placeholder*="YYYY"]',
+                'input[aria-label*="year"]',
+            ]
+            
+            year_input = None
+            for selector in year_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for el in elements:
+                        if el.is_displayed():
+                            year_input = el
+                            logger.info(f"📅 找到年份输入框: {selector}")
+                            break
+                    if year_input:
+                        break
+                except Exception:
+                    continue
+            
+            if not year_input:
+                return False
+            
+            # 清空并输入年份
+            self._safe_input_date_field(driver, year_input, "1990")
+            time.sleep(0.3)
+            
+            # 找月份输入框
+            month_selectors = [
+                '[data-type="month"]',
+                'input[name="month"]',
+                'input[placeholder*="月"]',
+                'input[placeholder*="MM"]',
+                'input[aria-label*="month"]',
+            ]
+            
+            month_input = None
+            for selector in month_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for el in elements:
+                        if el.is_displayed():
+                            month_input = el
+                            break
+                    if month_input:
+                        break
+                except Exception:
+                    continue
+            
+            if month_input:
+                self._safe_input_date_field(driver, month_input, "05")
+                time.sleep(0.3)
+            
+            # 找日期输入框
+            day_selectors = [
+                '[data-type="day"]',
+                'input[name="day"]',
+                'input[placeholder*="日"]',
+                'input[placeholder*="DD"]',
+                'input[aria-label*="day"]',
+            ]
+            
+            day_input = None
+            for selector in day_selectors:
+                try:
+                    elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for el in elements:
+                        if el.is_displayed():
+                            day_input = el
+                            break
+                    if day_input:
+                        break
+                except Exception:
+                    continue
+            
+            if day_input:
+                self._safe_input_date_field(driver, day_input, "12")
+            
+            return True
+            
+        except Exception as e:
+            logger.debug(f"生日方式1失败: {e}")
+            return False
+    
+    def _input_birthday_method2(self, driver: uc.Chrome) -> bool:
+        """生日输入方式2: 查找所有数字输入框"""
+        try:
+            # 查找页面上所有可能的日期输入框
+            inputs = driver.find_elements(
+                By.CSS_SELECTOR,
+                'input[type="text"], input[type="number"], input[inputmode="numeric"]'
+            )
+            
+            visible_inputs = [inp for inp in inputs if inp.is_displayed()]
+            
+            # 如果有3个可见的数字输入框，可能是年/月/日
+            if len(visible_inputs) >= 3:
+                logger.info(f"📅 找到 {len(visible_inputs)} 个可见输入框，尝试按顺序填入")
+                
+                # 尝试识别哪个是年/月/日
+                date_values = {
+                    "year": "1990",
+                    "month": "05", 
+                    "day": "12"
+                }
+                
+                filled_count = 0
+                for inp in visible_inputs[:3]:
+                    try:
+                        placeholder = inp.get_attribute("placeholder") or ""
+                        name = inp.get_attribute("name") or ""
+                        aria_label = inp.get_attribute("aria-label") or ""
+                        data_type = inp.get_attribute("data-type") or ""
+                        
+                        # 根据属性判断类型
+                        field_info = (placeholder + name + aria_label + data_type).lower()
+                        
+                        if "year" in field_info or "年" in field_info or "yyyy" in field_info:
+                            self._safe_input_date_field(driver, inp, date_values["year"])
+                            filled_count += 1
+                        elif "month" in field_info or "月" in field_info or "mm" in field_info:
+                            self._safe_input_date_field(driver, inp, date_values["month"])
+                            filled_count += 1
+                        elif "day" in field_info or "日" in field_info or "dd" in field_info:
+                            self._safe_input_date_field(driver, inp, date_values["day"])
+                            filled_count += 1
+                        
+                        time.sleep(0.2)
+                    except Exception:
+                        continue
+                
+                # 如果没有通过属性识别成功，按顺序填入（月/日/年 或 年/月/日）
+                if filled_count == 0:
+                    logger.info("📅 按顺序填入日期...")
+                    # 假设是 月/日/年 格式（美国格式）
+                    try:
+                        self._safe_input_date_field(driver, visible_inputs[0], "05")
+                        time.sleep(0.2)
+                        self._safe_input_date_field(driver, visible_inputs[1], "12")
+                        time.sleep(0.2)
+                        self._safe_input_date_field(driver, visible_inputs[2], "1990")
+                        return True
+                    except Exception:
+                        pass
+                
+                return filled_count > 0
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"生日方式2失败: {e}")
+            return False
+    
+    def _input_birthday_method3(self, driver: uc.Chrome) -> bool:
+        """生日输入方式3: 下拉选择框"""
+        try:
+            # 查找 select 元素
+            selects = driver.find_elements(By.TAG_NAME, "select")
+            visible_selects = [s for s in selects if s.is_displayed()]
+            
+            if len(visible_selects) >= 3:
+                logger.info(f"📅 找到 {len(visible_selects)} 个下拉框，尝试选择日期")
+                
+                from selenium.webdriver.support.ui import Select
+                
+                for sel in visible_selects:
+                    try:
+                        name = sel.get_attribute("name") or ""
+                        aria_label = sel.get_attribute("aria-label") or ""
+                        field_id = sel.get_attribute("id") or ""
+                        field_info = (name + aria_label + field_id).lower()
+                        
+                        select_obj = Select(sel)
+                        
+                        if "year" in field_info or "年" in field_info:
+                            select_obj.select_by_value("1990")
+                        elif "month" in field_info or "月" in field_info:
+                            select_obj.select_by_value("5")
+                        elif "day" in field_info or "日" in field_info:
+                            select_obj.select_by_value("12")
+                        
+                        time.sleep(0.2)
+                    except Exception:
+                        continue
+                
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"生日方式3失败: {e}")
+            return False
+    
+    def _input_birthday_method4(self, driver: uc.Chrome) -> bool:
+        """生日输入方式4: 单个日期输入框 (date picker)"""
+        try:
+            # 查找 date 类型输入框
+            date_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="date"]')
+            
+            for date_input in date_inputs:
+                if date_input.is_displayed():
+                    logger.info("📅 找到日期选择器")
+                    try:
+                        # 格式: YYYY-MM-DD
+                        driver.execute_script(
+                            "arguments[0].value = '1990-05-12';"
+                            "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));"
+                            "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                            date_input
+                        )
+                        return True
+                    except Exception:
+                        pass
+            
+            # 查找单个文本框可能用于完整日期
+            single_date_selectors = [
+                'input[placeholder*="birthday"]',
+                'input[placeholder*="生日"]',
+                'input[placeholder*="date of birth"]',
+                'input[name*="birthday"]',
+                'input[name*="dob"]',
+            ]
+            
+            for selector in single_date_selectors:
+                try:
+                    inputs = driver.find_elements(By.CSS_SELECTOR, selector)
+                    for inp in inputs:
+                        if inp.is_displayed():
+                            self.fill_input(driver, inp, "05/12/1990", char_delay=0.05)
+                            return True
+                except Exception:
+                    continue
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"生日方式4失败: {e}")
+            return False
+    
+    def _safe_input_date_field(self, driver: uc.Chrome, element, value: str):
+        """安全地输入日期字段值"""
+        try:
+            # 先点击元素
+            try:
+                element.click()
+            except Exception:
+                driver.execute_script("arguments[0].click();", element)
+            time.sleep(0.1)
+            
+            # 尝试清空
+            try:
+                element.clear()
+            except Exception:
+                pass
+            
+            # 尝试全选 (三击)
+            try:
+                actions = ActionChains(driver)
+                actions.triple_click(element).perform()
+                time.sleep(0.1)
+            except Exception:
+                pass
+            
+            # 逐字输入
+            try:
+                for char in value:
+                    element.send_keys(char)
+                    time.sleep(0.05)
+                return True
+            except Exception:
+                pass
+            
+            # 如果 send_keys 失败，用 JS
+            try:
+                driver.execute_script(
+                    "arguments[0].value = arguments[1];"
+                    "arguments[0].dispatchEvent(new Event('input', {bubbles:true}));"
+                    "arguments[0].dispatchEvent(new Event('change', {bubbles:true}));",
+                    element,
+                    value
+                )
+                return True
+            except Exception:
+                pass
+            
+            return False
+            
+        except Exception as e:
+            logger.debug(f"日期字段输入失败: {e}")
+            return False
+    
+    def _debug_page_elements(self, driver: uc.Chrome, step_name: str):
+        """调试：打印页面关键元素信息"""
+        try:
+            logger.info(f"🔍 调试 [{step_name}] 页面元素...")
+            
+            # 当前URL
+            logger.info(f"   URL: {driver.current_url}")
+            
+            # 查找所有输入框
+            inputs = driver.find_elements(By.TAG_NAME, "input")
+            visible_inputs = [inp for inp in inputs if inp.is_displayed()]
+            logger.info(f"   可见输入框数量: {len(visible_inputs)}")
+            
+            for i, inp in enumerate(visible_inputs[:10]):  # 最多显示10个
+                try:
+                    inp_type = inp.get_attribute("type") or "text"
+                    inp_name = inp.get_attribute("name") or ""
+                    inp_id = inp.get_attribute("id") or ""
+                    inp_placeholder = inp.get_attribute("placeholder") or ""
+                    inp_data_type = inp.get_attribute("data-type") or ""
+                    inp_aria = inp.get_attribute("aria-label") or ""
+                    
+                    logger.info(
+                        f"   输入框{i+1}: type={inp_type}, name={inp_name}, "
+                        f"id={inp_id}, placeholder={inp_placeholder}, "
+                        f"data-type={inp_data_type}, aria-label={inp_aria}"
+                    )
+                except Exception:
+                    pass
+            
+            # 查找所有按钮
+            buttons = driver.find_elements(By.TAG_NAME, "button")
+            visible_buttons = [btn for btn in buttons if btn.is_displayed()]
+            logger.info(f"   可见按钮数量: {len(visible_buttons)}")
+            
+            for i, btn in enumerate(visible_buttons[:5]):  # 最多显示5个
+                try:
+                    btn_text = btn.text or ""
+                    btn_type = btn.get_attribute("type") or ""
+                    logger.info(f"   按钮{i+1}: text={btn_text}, type={btn_type}")
+                except Exception:
+                    pass
+            
+            # 查找下拉框
+            selects = driver.find_elements(By.TAG_NAME, "select")
+            visible_selects = [s for s in selects if s.is_displayed()]
+            if visible_selects:
+                logger.info(f"   可见下拉框数量: {len(visible_selects)}")
+            
+            # 保存页面源码片段
+            if config.SAVE_SCREENSHOTS:
+                try:
+                    with open(f"debug_{step_name}_page.html", "w", encoding="utf-8") as f:
+                        f.write(driver.page_source)
+                    logger.info(f"   页面HTML已保存到 debug_{step_name}_page.html")
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            logger.debug(f"调试输出失败: {e}")
+
+    
         """
         检查并处理错误页面
         
@@ -1610,40 +1968,45 @@ class OpenAIRegistrationBot:
             
             # 输入生日
             logger.info("🎂 输入生日...")
+            birthday_success = False
             try:
-                year_input = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, '[data-type="year"]'))
-                )
+                # 保存当前页面截图用于调试
+                if config.SAVE_SCREENSHOTS:
+                    driver.save_screenshot("birthday_before.png")
                 
-                actions = ActionChains(driver)
-                actions.click(year_input).perform()
-                time.sleep(0.3)
-                year_input.send_keys(Keys.CONTROL + "a")
-                for char in "1990":
-                    year_input.send_keys(char)
-                    time.sleep(0.1)
+                # 打印页面HTML片段用于调试
+                try:
+                    page_source = driver.page_source
+                    logger.debug(f"页面长度: {len(page_source)}")
+                except Exception:
+                    pass
                 
-                month_input = driver.find_element(By.CSS_SELECTOR, '[data-type="month"]')
-                actions.click(month_input).perform()
-                time.sleep(0.3)
-                month_input.send_keys(Keys.CONTROL + "a")
-                for char in "05":
-                    month_input.send_keys(char)
-                    time.sleep(0.1)
+                # 尝试多种生日输入方式
+                birthday_success = self._input_birthday_method1(driver)
                 
-                day_input = driver.find_element(By.CSS_SELECTOR, '[data-type="day"]')
-                actions.click(day_input).perform()
-                time.sleep(0.3)
-                day_input.send_keys(Keys.CONTROL + "a")
-                for char in "12":
-                    day_input.send_keys(char)
-                    time.sleep(0.1)
+                if not birthday_success:
+                    logger.info("🔄 尝试备选方案2...")
+                    birthday_success = self._input_birthday_method2(driver)
                 
-                logger.info("✅ 生日输入完成: 1990/05/12")
+                if not birthday_success:
+                    logger.info("🔄 尝试备选方案3 (下拉选择)...")
+                    birthday_success = self._input_birthday_method3(driver)
+                
+                if not birthday_success:
+                    logger.info("🔄 尝试备选方案4 (日期选择器)...")
+                    birthday_success = self._input_birthday_method4(driver)
+                
+                if birthday_success:
+                    logger.info("✅ 生日输入完成: 1990/05/12")
+                else:
+                    logger.warning("⚠️ 所有生日输入方式都失败，尝试继续...")
+                    
             except Exception as e:
                 logger.warning(f"⚠️ 生日输入失败: {e}")
                 if config.SAVE_SCREENSHOTS:
                     driver.save_screenshot("birthday_error.png")
+                # 尝试截取页面元素信息
+                self._debug_page_elements(driver, "birthday")
             
             time.sleep(1)
             
@@ -1796,8 +2159,216 @@ class OpenAIRegistrationBot:
         logger.info("=" * 70)
 
 
+def debug_registration_flow():
+    """
+    调试模式：打开浏览器手动检查各个注册步骤的页面元素
+    用于分析页面结构和提取选择器
+    """
+    import sys
+    
+    logger.info("=" * 70)
+    logger.info("🔍 调试模式 - 检查注册流程页面元素")
+    logger.info("=" * 70 + "\n")
+    
+    bot = OpenAIRegistrationBot(use_proxy=config.USE_PROXY)
+    driver = None
+    
+    try:
+        driver = bot.get_driver()
+        
+        # 步骤1: 访问主页
+        logger.info("\n" + "=" * 50)
+        logger.info("📌 步骤1: 访问 ChatGPT 主页")
+        logger.info("=" * 50)
+        driver.get("https://chat.openai.com/chat")
+        time.sleep(5)
+        
+        if config.SAVE_SCREENSHOTS:
+            driver.save_screenshot("debug_step1_homepage.png")
+        bot._debug_page_elements(driver, "step1_homepage")
+        
+        input("\n按 Enter 继续到步骤2（点击注册）...")
+        
+        # 步骤2: 点击注册按钮
+        logger.info("\n" + "=" * 50)
+        logger.info("📌 步骤2: 点击注册按钮")
+        logger.info("=" * 50)
+        
+        signup_selectors = [
+            (By.CSS_SELECTOR, '[data-testid="signup-button"]'),
+            (By.XPATH, "//a[contains(., 'Sign up') or contains(., '注册')]"),
+            (By.XPATH, "//button[contains(., 'Sign up') or contains(., '注册')]"),
+        ]
+        try:
+            bot.click_first_clickable(driver, signup_selectors, timeout=10)
+            time.sleep(3)
+        except Exception as e:
+            logger.warning(f"点击注册按钮失败: {e}")
+            driver.get("https://chat.openai.com/auth/signup")
+            time.sleep(3)
+        
+        if config.SAVE_SCREENSHOTS:
+            driver.save_screenshot("debug_step2_signup.png")
+        bot._debug_page_elements(driver, "step2_signup")
+        
+        input("\n按 Enter 继续到步骤3（输入邮箱后）...")
+        
+        # 步骤3: 邮箱输入页面
+        logger.info("\n" + "=" * 50)
+        logger.info("📌 步骤3: 邮箱输入页面")
+        logger.info("=" * 50)
+        
+        # 尝试输入测试邮箱
+        email_selectors = [
+            (By.ID, "email"),
+            (By.CSS_SELECTOR, 'input[type="email"]'),
+            (By.CSS_SELECTOR, 'input[name="email"]'),
+        ]
+        try:
+            email_input = bot.wait_for_any_visible(driver, email_selectors, timeout=10)
+            bot.fill_input(driver, email_input, "test@example.com", char_delay=0.02)
+            
+            # 点击继续
+            continue_selectors = [
+                (By.CSS_SELECTOR, 'button[type="submit"]'),
+            ]
+            bot.click_first_clickable(driver, continue_selectors, timeout=5)
+            time.sleep(3)
+        except Exception as e:
+            logger.warning(f"邮箱输入失败: {e}")
+        
+        if config.SAVE_SCREENSHOTS:
+            driver.save_screenshot("debug_step3_email.png")
+        bot._debug_page_elements(driver, "step3_email")
+        
+        input("\n按 Enter 继续到步骤4（密码输入后）...")
+        
+        # 步骤4: 密码输入页面
+        logger.info("\n" + "=" * 50)
+        logger.info("📌 步骤4: 密码输入页面")
+        logger.info("=" * 50)
+        
+        if config.SAVE_SCREENSHOTS:
+            driver.save_screenshot("debug_step4_password.png")
+        bot._debug_page_elements(driver, "step4_password")
+        
+        # 手动等待用户操作
+        logger.info("\n⚠️ 请手动完成以下步骤：")
+        logger.info("   1. 输入密码并点击继续")
+        logger.info("   2. 输入邮箱验证码")
+        logger.info("   3. 等待进入姓名/生日页面")
+        input("\n当到达姓名/生日页面时，按 Enter 继续...")
+        
+        # 步骤5: 姓名/生日页面
+        logger.info("\n" + "=" * 50)
+        logger.info("📌 步骤5: 姓名/生日页面 (关键步骤)")
+        logger.info("=" * 50)
+        
+        if config.SAVE_SCREENSHOTS:
+            driver.save_screenshot("debug_step5_birthday.png")
+        bot._debug_page_elements(driver, "step5_birthday")
+        
+        # 详细分析生日相关元素
+        logger.info("\n🎂 详细分析生日输入元素...")
+        
+        # 查找所有可能的日期相关输入
+        date_selectors = [
+            '[data-type="year"]',
+            '[data-type="month"]',
+            '[data-type="day"]',
+            'input[name*="year"]',
+            'input[name*="month"]',
+            'input[name*="day"]',
+            'input[name*="birth"]',
+            'input[name*="date"]',
+            'input[type="date"]',
+            'input[inputmode="numeric"]',
+            'input[placeholder*="YYYY"]',
+            'input[placeholder*="MM"]',
+            'input[placeholder*="DD"]',
+            'input[placeholder*="年"]',
+            'input[placeholder*="月"]',
+            'input[placeholder*="日"]',
+            'select[name*="year"]',
+            'select[name*="month"]',
+            'select[name*="day"]',
+        ]
+        
+        for selector in date_selectors:
+            try:
+                elements = driver.find_elements(By.CSS_SELECTOR, selector)
+                if elements:
+                    logger.info(f"   ✅ 找到 '{selector}': {len(elements)} 个元素")
+                    for i, el in enumerate(elements):
+                        if el.is_displayed():
+                            tag = el.tag_name
+                            attrs = {
+                                "type": el.get_attribute("type"),
+                                "name": el.get_attribute("name"),
+                                "id": el.get_attribute("id"),
+                                "placeholder": el.get_attribute("placeholder"),
+                                "value": el.get_attribute("value"),
+                            }
+                            logger.info(f"      元素{i+1}: <{tag}> {attrs}")
+            except Exception:
+                pass
+        
+        # 保存完整页面HTML
+        try:
+            with open("debug_birthday_page_full.html", "w", encoding="utf-8") as f:
+                f.write(driver.page_source)
+            logger.info("\n📄 完整页面HTML已保存到 debug_birthday_page_full.html")
+        except Exception:
+            pass
+        
+        input("\n按 Enter 继续测试生日输入...")
+        
+        # 尝试各种生日输入方法
+        logger.info("\n🔧 测试生日输入方法...")
+        
+        if bot._input_birthday_method1(driver):
+            logger.info("✅ 方法1成功")
+        elif bot._input_birthday_method2(driver):
+            logger.info("✅ 方法2成功")
+        elif bot._input_birthday_method3(driver):
+            logger.info("✅ 方法3成功")
+        elif bot._input_birthday_method4(driver):
+            logger.info("✅ 方法4成功")
+        else:
+            logger.warning("❌ 所有方法都失败")
+        
+        if config.SAVE_SCREENSHOTS:
+            driver.save_screenshot("debug_step5_birthday_after.png")
+        
+        input("\n按 Enter 结束调试...")
+        
+    except Exception as e:
+        logger.error(f"调试过程出错: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    finally:
+        if driver:
+            driver.quit()
+    
+    logger.info("\n调试完成！请检查生成的截图和HTML文件。")
+
+
 def main():
     """主函数"""
+    import sys
+    
+    # 检查命令行参数
+    if len(sys.argv) > 1:
+        if sys.argv[1] in ["--debug", "-d", "debug"]:
+            debug_registration_flow()
+            return
+        elif sys.argv[1] in ["--help", "-h"]:
+            print("用法:")
+            print("  python register_with_proxy.py          # 正常注册模式")
+            print("  python register_with_proxy.py --debug  # 调试模式，检查页面元素")
+            return
+    
     logger.info("=" * 70)
     logger.info("OpenAI 账号注册机 - 集成代理版本")
     logger.info("=" * 70 + "\n")
